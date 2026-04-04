@@ -198,9 +198,9 @@ public:
         PetscFunctionBeginUser;
 
         DM dmExtruded;
-        PetscCall(DMPlexExtrude(dm2D, settings.io.n_layers_3d, PETSC_UNLIMITED, 
+        PetscCall(DMPlexExtrude(dm2D, settings.io.n_layers_3d, PETSC_UNLIMITED,
                                 PETSC_TRUE, PETSC_FALSE, PETSC_FALSE,
-                                NULL, NULL, NULL, &dmExtruded));
+                                NULL, NULL, &dmExtruded));
 
         PetscCall(DMClone(dmExtruded, &dm3D));
         PetscCall(PetscObjectSetName((PetscObject)dm3D, "Mesh3D"));

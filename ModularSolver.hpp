@@ -19,7 +19,9 @@ public:
     std::shared_ptr<SolverStrategy> strategy;
 
     int config_reconstruction_order = 1;
-    bool config_use_limiters = true; 
+    bool config_use_limiters = true;
+
+    PetscErrorCode RegisterCallbacks(TS) override { return PETSC_SUCCESS; }
     
     GradientMethod config_grad_method = GREEN_GAUSS;
     FluxKernelPtr config_flux_kernel = nullptr; 
@@ -27,7 +29,7 @@ public:
 
 public:
     ModularSolver() : VirtualSolver() {}
-    virtual ~ModularSolver() = default;
+    virtual ~ModularSolver() {}
 
     void SetStrategy(std::shared_ptr<SolverStrategy> s) { strategy = s; }
     void SetReconstruction(ReconstructionType type) { config_reconstruction_order = (type == LINEAR ? 2 : 1); }
@@ -60,7 +62,9 @@ public:
         return PETSC_SUCCESS;
     }
 
-    PetscErrorCode Run(int argc, char **argv) override;
+    PetscErrorCode Run(int argc, char **argv) override {
+        return VirtualSolver::Run(argc, argv);
+    }
 
     PetscErrorCode UpdateState(Vec Q_loc, Vec Aux_loc) override { 
         return transport->UpdateState(Q_loc, Aux_loc); 
