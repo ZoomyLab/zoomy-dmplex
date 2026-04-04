@@ -18,6 +18,9 @@ private:
 public:
     MOODSolver() : ModularSolver() { X_backup = NULL; X_low = NULL; }
 
+    PetscErrorCode RegisterCallbacks(TS) override { return PETSC_SUCCESS; }
+    PetscErrorCode UpdateState(Vec, Vec) override { return PETSC_SUCCESS; }
+
     MOODSolver(std::shared_ptr<SolverStrategy> strat) : ModularSolver() {
         this->SetStrategy(strat);
         X_backup = NULL; 
@@ -53,7 +56,7 @@ public:
 
         std::vector<std::string> names = {"b", "h", "u", "v", "w", "p"};
         PetscCall(io->Setup3D(dmQ, 6, names));
-        PetscCall(this->LoadInitialCondition());
+        PetscCall(this->SetupInitialConditions());
 
         if (!strategy) strategy = std::make_shared<SplittingStrategy>();
         PetscCall(TSSetApplicationContext(ts, this));
