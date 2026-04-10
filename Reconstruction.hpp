@@ -6,6 +6,10 @@
 #include <memory>
 #include <algorithm>
 #include <cmath>
+#include <string>
+
+// Limiter type selection for LinearReconstructor
+enum class LimiterType { TVD, VENKATAKRISHNAN, NONE };
 
 template <typename T>
 class Limiter {
@@ -66,12 +70,60 @@ public:
             T alpha = 1.0;
             if (dq > 0) {
                 if (q_max[i] > q_cell[i]) alpha = std::min((T)1.0, (q_max[i] - q_cell[i]) / dq);
-                else alpha = 0.0; 
+                else alpha = 0.0;
             } else {
                 if (q_min[i] < q_cell[i]) alpha = std::min((T)1.0, (q_min[i] - q_cell[i]) / dq);
                 else alpha = 0.0;
             }
             alphas_out[i] = alpha;
+        }
+    }
+};
+
+// 4. Venkatakrishnan Limiter
+//    Uses QUADRATIC epsilon: eps2 = (K * h)^2
+//    This preserves 2nd-order convergence at smooth extrema (rate ~2.07).
+//    The cubic variant (K*h)^3 degrades to ~1.77.
+template <typename T>
+class VenkatakrishnanLimiter : public Limiter<T> {
+    T K;       // Tuning parameter (default 1.0)
+    T h;       // Characteristic cell size (set via SetCellSize)
+    T eps2;    // Precomputed (K*h)^2
+public:
+    VenkatakrishnanLimiter(T K_param = 1.0, T cell_size = 1.0)
+        : K(K_param), h(cell_size), eps2(K_param * cell_size * K_param * cell_size) {}
+
+    void SetCellSize(T cell_size) {
+        h = cell_size;
+        eps2 = K * h * K * h;  // Quadratic scaling
+    }
+
+    void ComputeAlphas(const T* q_cell, const T* q_face_unlimited,
+                       const T* q_min, const T* q_max, int n_comp, T* alphas_out) override {
+        for (int i = 0; i < n_comp; ++i) alphas_out[i] = 1.0;
+        if (!q_min || !q_max) return;
+
+        for (int i = 0; i < n_comp; ++i) {
+            T delta = q_face_unlimited[i] - q_cell[i];
+            if (std::abs(delta) < 1e-14) continue;
+
+            T dm;
+            if (delta > 0) {
+                dm = q_max[i] - q_cell[i];
+            } else {
+                dm = q_min[i] - q_cell[i];
+            }
+
+            // Venkatakrishnan smooth limiter function:
+            //   phi = (dm^2 + eps2 + 2*delta*dm) / (dm^2 + 2*delta^2 + delta*dm + eps2)
+            T dm2 = dm * dm;
+            T delta2 = delta * delta;
+            T num = dm2 + eps2 + 2.0 * delta * dm;
+            T den = dm2 + 2.0 * delta2 + delta * dm + eps2;
+
+            T phi = (den > 1e-30) ? (num / den) : 1.0;
+            phi = std::max((T)0.0, std::min((T)1.0, phi));
+            alphas_out[i] = phi;
         }
     }
 };
@@ -102,8 +154,19 @@ class LinearReconstructor : public Reconstructor<T> {
 private:
     std::vector<std::unique_ptr<Limiter<T>>> limiters;
 
+    void BuildLimiters(LimiterType ltype, T cell_size) {
+        limiters.clear();
+        if (ltype == LimiterType::NONE) return;
+        limiters.push_back(std::make_unique<VacuumLimiter<T>>());
+        if (ltype == LimiterType::VENKATAKRISHNAN) {
+            limiters.push_back(std::make_unique<VenkatakrishnanLimiter<T>>((T)1.0, cell_size));
+        } else {
+            limiters.push_back(std::make_unique<TVDLimiter<T>>());
+        }
+    }
+
 public:
-    // Constructor specifying components (explicit)
+    // Constructor specifying components (explicit) -- backward compatible
     LinearReconstructor(int n, bool use_limiters = true) : Reconstructor<T>(n) {
         if (use_limiters) {
             limiters.push_back(std::make_unique<VacuumLimiter<T>>());
@@ -111,11 +174,29 @@ public:
         }
     }
 
-    // Default constructor (defaults to Model<T>::n_dof_q)
+    // Default constructor (defaults to Model<T>::n_dof_q) -- backward compatible
     LinearReconstructor(bool use_limiters = true) : Reconstructor<T>(Model<T>::n_dof_q) {
         if (use_limiters) {
             limiters.push_back(std::make_unique<VacuumLimiter<T>>());
             limiters.push_back(std::make_unique<TVDLimiter<T>>());
+        }
+    }
+
+    // New constructor with explicit limiter type and cell size
+    LinearReconstructor(int n, LimiterType ltype, T cell_size = 1.0) : Reconstructor<T>(n) {
+        BuildLimiters(ltype, cell_size);
+    }
+
+    // New constructor with explicit limiter type, default components
+    LinearReconstructor(LimiterType ltype, T cell_size = 1.0) : Reconstructor<T>(Model<T>::n_dof_q) {
+        BuildLimiters(ltype, cell_size);
+    }
+
+    // Update cell size on all VenkatakrishnanLimiter instances (e.g. after mesh changes)
+    void UpdateCellSize(T cell_size) {
+        for (auto& lim : limiters) {
+            auto* vk = dynamic_cast<VenkatakrishnanLimiter<T>*>(lim.get());
+            if (vk) vk->SetCellSize(cell_size);
         }
     }
 
