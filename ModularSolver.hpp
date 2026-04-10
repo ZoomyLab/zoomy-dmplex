@@ -5,31 +5,29 @@
 #include "VirtualSolver.hpp"
 #include "TransportStep.hpp"
 #include "SourceStep.hpp"
-#include "Reconstruction.hpp" 
+#include "Reconstruction.hpp"
 #include "Gradient.hpp"
-#include "MshLoader.hpp" 
 
 class SolverStrategy;
 
 class ModularSolver : public VirtualSolver {
 public:
-    std::unique_ptr<TransportStep<Real>> transport;
-    std::unique_ptr<SourceStep<Real>> source_solver;
-    
-    std::shared_ptr<SolverStrategy> strategy;
-
-    int config_reconstruction_order = 1;
-    bool config_use_limiters = true;
-
-    PetscErrorCode RegisterCallbacks(TS) override { return PETSC_SUCCESS; }
-    
-    GradientMethod config_grad_method = GREEN_GAUSS;
-    FluxKernelPtr config_flux_kernel = nullptr; 
-    NonConservativeFluxKernelPtr config_noncons_flux_kernel = nullptr;
-
-public:
     ModularSolver() : VirtualSolver() {}
     virtual ~ModularSolver() {}
+
+    // Components
+    std::unique_ptr<TransportStep<Real>> transport;
+    std::unique_ptr<SourceStep<Real>> source_solver;
+    std::shared_ptr<SolverStrategy> strategy;
+
+    // Config (set before InitializeComponents)
+    int config_reconstruction_order = 1;
+    bool config_use_limiters = true;
+    GradientMethod config_grad_method = GREEN_GAUSS;
+    FluxKernelPtr config_flux_kernel = nullptr;
+    NonConservativeFluxKernelPtr config_noncons_flux_kernel = nullptr;
+
+    PetscErrorCode RegisterCallbacks(TS) override { return PETSC_SUCCESS; }
 
     void SetStrategy(std::shared_ptr<SolverStrategy> s) { strategy = s; }
     void SetReconstruction(ReconstructionType type) { config_reconstruction_order = (type == LINEAR ? 2 : 1); }
@@ -62,12 +60,8 @@ public:
         return PETSC_SUCCESS;
     }
 
-    PetscErrorCode Run(int argc, char **argv) override {
-        return VirtualSolver::Run(argc, argv);
-    }
-
-    PetscErrorCode UpdateState(Vec Q_loc, Vec Aux_loc) override { 
-        return transport->UpdateState(Q_loc, Aux_loc); 
+    PetscErrorCode UpdateState(Vec Q_loc, Vec Aux_loc) override {
+        return transport->UpdateState(Q_loc, Aux_loc);
     }
 
     PetscErrorCode AddImplicitSourceToResidual(Vec X_glob, Vec F_glob, PetscReal sign) {
@@ -96,8 +90,13 @@ public:
             PetscCall(PetscSectionGetOffset(sQ, c, &offQ)); PetscCall(PetscSectionGetOffset(sAux, c, &offA)); PetscCall(PetscSectionGetOffset(sGlob, c, &offGlob));
             if (offGlob >= 0) {
                 PetscInt idx_glob = offGlob - rstart;
-                // Check for dry cell to avoid singular source terms
-                if (x_arr[offQ + 1] > 1e-6) {
+                // Source terms: skip dry cells for free-surface models
+                bool apply_source = true;
+                if constexpr (Model<Real>::n_dof_q > 1) {
+                    // Free-surface: Q[1] = h, skip if dry
+                    if (x_arr[offQ + 1] < 1e-6) apply_source = false;
+                }
+                if (apply_source) {
                     auto S = Model<Real>::source(&x_arr[offQ], &a_arr[offA], params_ptr);
                     for (int i = 0; i < Model<Real>::n_dof_q; ++i) f_arr[idx_glob + i] += sign * S[i];
                 }
@@ -254,10 +253,12 @@ public:
             if (offGlob >= 0) {
                 const PetscScalar* qc = &x_ptr[offQ];
                 
-                // --- RELAXATION FOR DRY CELLS ---
-                // If h is small, friction term singularity makes Jacobian explode (Inf/NaN).
-                // We detect this and set the block to Identity*a (Source = 0 assumption).
-                if (qc[1] < 1e-4) {
+                // --- RELAXATION FOR DRY CELLS (free-surface models only) ---
+                bool is_dry = false;
+                if constexpr (Model<Real>::n_dof_q > 1) {
+                    is_dry = (qc[1] < 1e-4);
+                }
+                if (is_dry) {
                     PetscScalar J_block[n_dof * n_dof] = {0};
                     for(int i=0; i<n_dof; ++i) J_block[i*n_dof + i] = a; // Diag = a
                     PetscInt rows[n_dof]; for(int i=0; i<n_dof; ++i) rows[i] = offGlob + i;
@@ -402,8 +403,12 @@ public:
             PetscInt offQ, offA, offGlob;
             PetscCall(PetscSectionGetOffset(sQ, c, &offQ)); PetscCall(PetscSectionGetOffset(sAux, c, &offA)); PetscCall(PetscSectionGetOffset(sGlob, c, &offGlob));
             if (offGlob >= 0) {
-                // RELAXATION also here for consistency
-                if (x_arr[offQ + 1] < 1e-4) {
+                // RELAXATION for dry cells (free-surface models only)
+                bool is_dry_jac = false;
+                if constexpr (Model<Real>::n_dof_q > 1) {
+                    is_dry_jac = (x_arr[offQ + 1] < 1e-4);
+                }
+                if (is_dry_jac) {
                     PetscScalar J_block[n_dof * n_dof] = {0};
                     for(int i=0; i<n_dof; ++i) J_block[i*n_dof + i] = a; 
                     PetscInt rows[n_dof]; for(int i=0; i<n_dof; ++i) rows[i] = offGlob + i;
