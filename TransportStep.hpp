@@ -4,6 +4,18 @@
 #include "VirtualSolver.hpp"
 #include "Reconstruction.hpp"
 #include "Gradient.hpp"
+#include <type_traits>
+
+// SFINAE trait: detect if Model<T> has a static diffusive_flux method
+template <typename T, typename = void>
+struct HasDiffusiveFlux : std::false_type {};
+
+template <typename T>
+struct HasDiffusiveFlux<T, std::void_t<decltype(
+    Model<T>::diffusive_flux(
+        std::declval<const T*>(), std::declval<const T*>(),
+        std::declval<const T*>(), std::declval<const T*>())
+)>> : std::true_type {};
 
 template <typename T>
 class TransportStep {
@@ -242,6 +254,33 @@ public:
                 }
                 for(int i=0; i<Model<T>::n_dof_q; ++i) { if (fL) fL[i] -= flux[i] * area; if (fR) fR[i] += flux[i] * area; }
 
+                // --- Diffusive flux (if model defines diffusive_flux) ---
+                if constexpr (HasDiffusiveFlux<T>::value) {
+                    if (g_ptr && gL_cell && gR_cell) {
+                        // Face-averaged gradient: 0.5 * (gradQ_L + gradQ_R)
+                        constexpr int n_gradQ = Model<T>::n_dof_q * Model<T>::dimension;
+                        T gradQ_face[n_gradQ];
+                        for (int k = 0; k < n_gradQ; ++k) {
+                            gradQ_face[k] = 0.5 * (gL_cell[k] + gR_cell[k]);
+                        }
+                        // Face-averaged state and aux for the diffusive flux evaluation
+                        T q_face[Model<T>::n_dof_q], a_face[Model<T>::n_dof_qaux];
+                        for (int i = 0; i < Model<T>::n_dof_q; ++i)
+                            q_face[i] = 0.5 * (qL_face[i] + qR_face[i]);
+                        for (int i = 0; i < Model<T>::n_dof_qaux; ++i)
+                            a_face[i] = 0.5 * (aL_face[i] + aR_face[i]);
+
+                        auto diff_flux = Model<T>::diffusive_flux(q_face, a_face, gradQ_face, parameters.data());
+
+                        // Diffusive flux dotted with face normal (already scaled by area via n_hat * area)
+                        // Convention: diffusive flux is ADDED to residual (it opposes convective flux sign)
+                        for (int i = 0; i < Model<T>::n_dof_q; ++i) {
+                            if (fL) fL[i] += diff_flux[i] * area;
+                            if (fR) fR[i] -= diff_flux[i] * area;
+                        }
+                    }
+                }
+
             } else if (num_cells == 1) {
                 // Boundary Face
                 PetscInt tag_id; PetscCall(DMLabelGetValue(label, f, &tag_id));
@@ -274,10 +313,29 @@ public:
                     PetscScalar *fL = (offFL >= 0 && offFL + Model<T>::n_dof_q <= size_f) ? &f_ptr[offFL] : nullptr;
                     if (noncons_flux_kernel) {
                         auto nc_stacked = noncons_flux_kernel(qL_face, qR_face, aL_face, aR_face, parameters.data(), n_hat);
-                        auto* nc_into_left  = nc_stacked.data + Model<T>::n_dof_q; 
+                        auto* nc_into_left  = nc_stacked.data + Model<T>::n_dof_q;
                         if (fL) { for(int i=0; i<Model<T>::n_dof_q; ++i) fL[i] -= nc_into_left[i] * area; }
                     }
                     if (fL) { for(int i=0; i<Model<T>::n_dof_q; ++i) fL[i] -= flux[i] * area; }
+
+                    // --- Diffusive flux at boundary (if model defines diffusive_flux) ---
+                    if constexpr (HasDiffusiveFlux<T>::value) {
+                        if (g_ptr && gL_cell) {
+                            // At boundaries, use the interior cell gradient (one-sided)
+                            const T* gradQ_face = gL_cell;
+
+                            T q_face[Model<T>::n_dof_q], a_face[Model<T>::n_dof_qaux];
+                            for (int i = 0; i < Model<T>::n_dof_q; ++i)
+                                q_face[i] = 0.5 * (qL_face[i] + qR_face[i]);
+                            for (int i = 0; i < Model<T>::n_dof_qaux; ++i)
+                                a_face[i] = aL_face[i];
+
+                            auto diff_flux = Model<T>::diffusive_flux(q_face, a_face, gradQ_face, parameters.data());
+                            if (fL) {
+                                for (int i = 0; i < Model<T>::n_dof_q; ++i) fL[i] += diff_flux[i] * area;
+                            }
+                        }
+                    }
                 }
             }
         }

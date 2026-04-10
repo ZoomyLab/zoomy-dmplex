@@ -13,9 +13,10 @@ using json = nlohmann::json;
 struct SolverSettings {
     double t_end = 1.0;
     double cfl = 0.5;
-    bool use_deep_adjacency = true; 
-    int reconstruction_order = 1;   
-    double min_dt = 1.0e-12;        
+    bool use_deep_adjacency = true;
+    int reconstruction_order = 1;
+    double min_dt = 1.0e-12;
+    std::string limiter = "venkatakrishnan";  // "venkatakrishnan" (default), "tvd", or "none"
 };
 
 struct IOSettings {
@@ -94,6 +95,7 @@ struct Settings {
             s.solver.use_deep_adjacency = jsol.value("use_deep_adjacency", true); 
             s.solver.reconstruction_order = jsol.value("reconstruction_order", 1); 
             s.solver.min_dt = jsol.value("min_dt", 1.0e-12);
+            s.solver.limiter = jsol.value("limiter", "venkatakrishnan");
         }
 
         if (j.contains("model")) {
