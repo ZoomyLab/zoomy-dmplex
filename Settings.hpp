@@ -17,6 +17,12 @@ struct SolverSettings {
     int reconstruction_order = 1;
     double min_dt = 1.0e-12;
     std::string limiter = "venkatakrishnan";  // "venkatakrishnan" (default), "tvd", or "none"
+    // Time integration, jax-style: pick the integrator from settings instead of
+    // hard-coding it. "splitting" = explicit transport (SSP-RK) + implicit source
+    // (default, like jax's explicit HyperbolicSolver); "imex" = explicit transport
+    // + implicit source via TSARKIMEX (like jax's IMEXSourceSolverJax, for stiff
+    // sources); "implicit" = fully implicit BDF2.
+    std::string time_integration = "splitting";  // "splitting" | "imex" | "implicit"
 };
 
 struct IOSettings {
@@ -96,6 +102,7 @@ struct Settings {
             s.solver.reconstruction_order = jsol.value("reconstruction_order", 1); 
             s.solver.min_dt = jsol.value("min_dt", 1.0e-12);
             s.solver.limiter = jsol.value("limiter", "venkatakrishnan");
+            s.solver.time_integration = jsol.value("time_integration", "splitting");
         }
 
         if (j.contains("model")) {

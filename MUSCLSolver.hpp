@@ -29,15 +29,45 @@ public:
         } else {
             SetReconstruction(PCM);
         }
+        // Limiter on unless explicitly disabled ("none"). The limiter *type*
+        // (venkatakrishnan/tvd) is selected inside LinearReconstructor; only the
+        // on/off toggle is wired here.
+        SetLimiters(settings.solver.limiter != "none");
         PetscCall(InitializeComponents());
 
         std::vector<std::string> names = {"b", "h", "u", "v", "w", "p"};
         PetscCall(io->Setup3D(dmQ, 6, names));
         PetscCall(this->SetupInitialConditions());
 
-        if (!strategy) strategy = std::make_shared<SplittingStrategy>();
+        // Select the time integrator from settings (jax-style), unless one was
+        // already set explicitly (e.g. from main.cpp). "splitting" is the explicit
+        // default; "imex" turns on TSARKIMEX (implicit source); "implicit" is BDF2.
+        if (!strategy) {
+            const std::string& ti = settings.solver.time_integration;
+            if (ti == "imex") {
+                strategy = std::make_shared<IMEXStrategy>();
+            } else if (ti == "implicit") {
+                strategy = std::make_shared<FullyImplicitStrategy>();
+            } else {
+                if (ti != "splitting" && rank == 0) {
+                    std::cout << "[WARN] unknown time_integration '" << ti
+                              << "', falling back to 'splitting'." << std::endl;
+                }
+                strategy = std::make_shared<SplittingStrategy>();
+            }
+        }
+        if (rank == 0) {
+            std::cout << "[INFO] time_integration=" << settings.solver.time_integration
+                      << std::endl;
+        }
         PetscCall(TSSetApplicationContext(ts, this));
         PetscCall(RegisterCallbacks(ts));
+
+        // Wire the chosen strategy into the TS (sets RHS/IFunction/IJacobian and
+        // the TS type). Must run after the application context is set, since the
+        // strategy callbacks fetch the solver via TSGetApplicationContext, and
+        // before TSSetFromOptions so command-line options can still override.
+        PetscCall(strategy->SetupTS(ts, this));
 
         PetscCall(TSSetTime(ts, 0.0));
         PetscCall(TSSetMaxTime(ts, settings.solver.t_end));

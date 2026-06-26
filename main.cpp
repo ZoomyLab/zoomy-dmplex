@@ -12,10 +12,10 @@ int main(int argc, char **argv) {
     PetscCall(PetscInitialize(&argc, &argv, NULL, help));
 
     {
-        auto strategy = std::make_shared<FullyImplicitStrategy>();
-
+        // Time integrator is chosen from settings.json (solver.time_integration:
+        // "splitting" | "imex" | "implicit"), selected inside MUSCLSolver::Run.
+        // To force one from code instead, call solver.SetStrategy(...) here.
         MUSCLSolver solver;
-        solver.SetStrategy(strategy);
         solver.SetFluxKernel(Numerics<Real>::numerical_flux);
         solver.SetNonConsFluxKernel(Numerics<Real>::numerical_fluctuations);
 
