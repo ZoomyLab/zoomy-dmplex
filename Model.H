@@ -38,7 +38,7 @@ struct Model {
     static constexpr int idx_b = 0;
     static constexpr int idx_h = 1;
     static constexpr int n_boundary_tags = 1;
-    static const std::vector<std::string> get_boundary_tags() { return { "outer" }; }
+    static const std::vector<std::string> get_boundary_tags() { return { "default" }; }
     static const std::vector<std::string> parameter_names() { return { "g", "rho", "nu", "lambda_s", "e_x" }; }
     static const std::vector<T> default_parameters() { return { 9.81, 1.0, 0.0, 0.0, 0.0 }; }
     PORTABLE_FN static inline SimpleArray<T, 4> flux_x(
