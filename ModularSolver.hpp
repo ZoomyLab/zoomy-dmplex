@@ -267,7 +267,7 @@ public:
                 else {
                     auto dS_dQ = Model<Real>::source_jacobian_wrt_variables(qc, &a_ptr[offA], params_ptr);
                     auto dS_dAux = Model<Real>::source_jacobian_wrt_aux_variables(qc, &a_ptr[offA], params_ptr);
-                    auto dAux_dQ = Model<Real>::update_aux_variables_jacobian_wrt_variables(qc, &a_ptr[offA], params_ptr);
+                    auto dAux_dQ = aux_jacobian_wrt_q<Real>(qc, &a_ptr[offA], params_ptr);
                     
                     PetscScalar J_block[n_dof * n_dof];
                     for(int i=0; i<n_dof; ++i) {
@@ -416,7 +416,7 @@ public:
                 } else {
                     auto dS_dQ = Model<Real>::source_jacobian_wrt_variables(&x_arr[offQ], &a_arr[offA], params_ptr);
                     auto dS_dAux = Model<Real>::source_jacobian_wrt_aux_variables(&x_arr[offQ], &a_arr[offA], params_ptr);
-                    auto dAux_dQ = Model<Real>::update_aux_variables_jacobian_wrt_variables(&x_arr[offQ], &a_arr[offA], params_ptr);
+                    auto dAux_dQ = aux_jacobian_wrt_q<Real>(&x_arr[offQ], &a_arr[offA], params_ptr);
                     PetscScalar J_block[n_dof * n_dof];
                     for(int i=0; i<n_dof; ++i) {
                         for(int j=0; j<n_dof; ++j) {

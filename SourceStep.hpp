@@ -4,9 +4,46 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <type_traits>
 #include <petscvec.h>
 #include <petscdmplex.h>
 #include "Model.H"
+
+// SFINAE: does Model<T> provide the analytic aux Jacobian dAux/dQ? The
+// SystemModel-path printer only emits it when the aux state carries an analytic
+// slot; for SME-type models (aux = mesh-derivative + closure) it is solver-side.
+template <typename T, typename = void>
+struct HasAuxJacobian : std::false_type {};
+template <typename T>
+struct HasAuxJacobian<T, std::void_t<decltype(Model<T>::update_aux_variables_jacobian_wrt_variables(
+    (const T*)nullptr, (const T*)nullptr, (const T*)nullptr))>> : std::true_type {};
+
+// dAux/dQ as an (n_dof_qaux x n_dof_q) row-major matrix (index [k*n_q + j]).
+// Uses the model's analytic Jacobian when emitted, else finite-differences
+// update_aux_variables. Keeps the implicit-source Newton chain rule intact
+// regardless of whether the printer emitted the analytic aux Jacobian.
+template <typename T>
+inline SimpleArray<T, Model<T>::n_dof_qaux * Model<T>::n_dof_q>
+aux_jacobian_wrt_q(const T* q, const T* aux, const T* params) {
+    constexpr int n_q = Model<T>::n_dof_q;
+    constexpr int n_aux = Model<T>::n_dof_qaux;
+    if constexpr (HasAuxJacobian<T>::value) {
+        return Model<T>::update_aux_variables_jacobian_wrt_variables(q, aux, params);
+    } else {
+        SimpleArray<T, n_aux * n_q> J;
+        for (int i = 0; i < n_aux * n_q; ++i) J[i] = (T)0;
+        auto a0 = Model<T>::update_aux_variables(q, aux, params);
+        T qp[n_q];
+        for (int j = 0; j < n_q; ++j) {
+            for (int m = 0; m < n_q; ++m) qp[m] = q[m];
+            T h = (T)1e-7 * (std::abs(q[j]) + (T)1e-7);
+            qp[j] += h;
+            auto a1 = Model<T>::update_aux_variables(qp, aux, params);
+            for (int k = 0; k < n_aux; ++k) J[k * n_q + j] = (a1[k] - a0[k]) / h;
+        }
+        return J;
+    }
+}
 
 template <typename T>
 class SourceStep {
@@ -123,7 +160,7 @@ private:
             // Get Jacobians from Model
             auto dS_dQ   = Model<T>::source_jacobian_wrt_variables(q_curr.data(), aux_curr.data(), params);
             auto dS_dAux = Model<T>::source_jacobian_wrt_aux_variables(q_curr.data(), aux_curr.data(), params);
-            auto dAux_dQ = Model<T>::update_aux_variables_jacobian_wrt_variables(q_curr.data(), aux_curr.data(), params);
+            auto dAux_dQ = aux_jacobian_wrt_q<T>(q_curr.data(), aux_curr.data(), params);
 
             // Reset J to Identity
             std::fill(J.begin(), J.end(), 0.0);
