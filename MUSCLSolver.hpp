@@ -75,9 +75,22 @@ public:
         // before TSSetFromOptions so command-line options can still override.
         PetscCall(strategy->SetupTS(ts, this));
 
+        // dt is driven manually by the CFL condition (ComputeTimeStep); disable
+        // the TS adaptive controller so it doesn't fight the fixed step (it
+        // otherwise trips "bad hmax in TSAdaptChoose" near t_end).
+        {
+            TSAdapt adapt;
+            PetscCall(TSGetAdapt(ts, &adapt));
+            PetscCall(TSAdaptSetType(adapt, TSADAPTNONE));
+        }
+
         PetscCall(TSSetTime(ts, 0.0));
         PetscCall(TSSetMaxTime(ts, settings.solver.t_end));
-        PetscCall(TSSetExactFinalTime(ts, TS_EXACTFINALTIME_MATCHSTEP));
+        // STEPOVER (not MATCHSTEP): the manual CFL loop below stops once
+        // time >= t_end, so let the last step overshoot slightly rather than
+        // have the SSP adapter shrink dt to land on t_end (which trips
+        // "bad hmax in TSAdaptChoose").
+        PetscCall(TSSetExactFinalTime(ts, TS_EXACTFINALTIME_STEPOVER));
 
         PetscReal dt_start = std::max(ComputeTimeStep(), settings.solver.min_dt);
         PetscCall(TSSetTimeStep(ts, dt_start));

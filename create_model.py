@@ -51,10 +51,13 @@ def build_model(level, outer="wall", dimension=3):
     tags here exactly like zoomy_foam does — the BCs lower to the indexed
     ``boundary_conditions(bc_idx, …)`` kernel automatically.
     """
+    # Tag name "default" is special in VirtualSolver: when the mesh has no
+    # $PhysicalNames (e.g. the Malpasset gmsh), the solver marks ALL boundary
+    # faces and routes them to this single BC. Use it for closed-domain runs.
     outer_bc = (
-        FromModel(tag="outer", definition="wall")
+        FromModel(tag="default", definition="wall")
         if outer == "wall"
-        else Extrapolation(tag="outer")
+        else Extrapolation(tag="default")
     )
     return SME(level=level, dimension=dimension,
                boundary_conditions=BoundaryConditions([outer_bc]))
