@@ -127,7 +127,7 @@ public:
             Real aL_p[n_aux]; for(int k=0; k<n_aux; ++k) aL_p[k] = aL[k];
             qL_p[j] += eps;
             if (n_aux > 0) {
-                auto res_a = Model<Real>::update_aux_variables(qL_p, aL_p, params);
+                auto res_a = Model<Real>::update_aux_variables(qL_p, aL_p, params, 0.0);
                 for(int k=0; k<n_aux; ++k) aL_p[k] = res_a[k];
             }
             auto F_p = config_flux_kernel(qL_p, qR, aL_p, aR, params, n);
@@ -147,7 +147,7 @@ public:
             Real aR_p[n_aux]; for(int k=0; k<n_aux; ++k) aR_p[k] = aR[k];
             qR_p[j] += eps;
             if (n_aux > 0) {
-                auto res_a = Model<Real>::update_aux_variables(qR_p, aR_p, params);
+                auto res_a = Model<Real>::update_aux_variables(qR_p, aR_p, params, 0.0);
                 for(int k=0; k<n_aux; ++k) aR_p[k] = res_a[k];
             }
             auto F_p = config_flux_kernel(qL, qR_p, aL, aR_p, params, n);
@@ -176,7 +176,7 @@ public:
         auto qR_base = Model<Real>::boundary_conditions(bc_idx, qL, aL, params, n, centroid, time, 0.0);
         PetscScalar aR_base[n_aux];
         if (n_aux > 0) {
-             auto res = Model<Real>::update_aux_variables(qR_base.data, aL, params); 
+             auto res = Model<Real>::update_aux_variables(qR_base.data, aL, params, 0.0); 
              for(int i=0; i<n_aux; ++i) aR_base[i] = res[i];
         }
         
@@ -191,14 +191,14 @@ public:
             
             qL_p[j] += eps;
             if (n_aux > 0) {
-                auto res_a = Model<Real>::update_aux_variables(qL_p, aL_p, params);
+                auto res_a = Model<Real>::update_aux_variables(qL_p, aL_p, params, 0.0);
                 for(int k=0; k<n_aux; ++k) aL_p[k] = res_a[k];
             }
 
             auto qR_p = Model<Real>::boundary_conditions(bc_idx, qL_p, aL_p, params, n, centroid, time, 0.0);
             PetscScalar aR_p[n_aux];
             if (n_aux > 0) {
-                auto res_ar = Model<Real>::update_aux_variables(qR_p.data, aL_p, params);
+                auto res_ar = Model<Real>::update_aux_variables(qR_p.data, aL_p, params, 0.0);
                 for(int k=0; k<n_aux; ++k) aR_p[k] = res_ar[k];
             }
 

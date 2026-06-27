@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <petscvec.h>
 #include <petscdmplex.h>
+#include "UserFunctions.H"
 #include "Model.H"
 
 // SFINAE: does Model<T> provide the analytic aux Jacobian dAux/dQ? The
@@ -32,13 +33,13 @@ aux_jacobian_wrt_q(const T* q, const T* aux, const T* params) {
     } else {
         SimpleArray<T, n_aux * n_q> J;
         for (int i = 0; i < n_aux * n_q; ++i) J[i] = (T)0;
-        auto a0 = Model<T>::update_aux_variables(q, aux, params);
+        auto a0 = Model<T>::update_aux_variables(q, aux, params, 0.0);
         T qp[n_q];
         for (int j = 0; j < n_q; ++j) {
             for (int m = 0; m < n_q; ++m) qp[m] = q[m];
             T h = (T)1e-7 * (std::abs(q[j]) + (T)1e-7);
             qp[j] += h;
-            auto a1 = Model<T>::update_aux_variables(qp, aux, params);
+            auto a1 = Model<T>::update_aux_variables(qp, aux, params, 0.0);
             for (int k = 0; k < n_aux; ++k) J[k * n_q + j] = (a1[k] - a0[k]) / h;
         }
         return J;
@@ -140,7 +141,7 @@ private:
 
         for(int iter=0; iter < max_newton_iter; ++iter) {
             // 1. Update Aux variables based on current Q (Consistency Step)
-            auto updated_aux = Model<T>::update_aux_variables(q_curr.data(), aux_curr.data(), params);
+            auto updated_aux = Model<T>::update_aux_variables(q_curr.data(), aux_curr.data(), params, 0.0);
             for(int i=0; i<n_aux; ++i) aux_curr[i] = updated_aux[i];
 
             // 2. Compute Source Term and Residual

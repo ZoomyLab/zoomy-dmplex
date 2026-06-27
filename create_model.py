@@ -37,24 +37,31 @@ from zoomy_core.transformation.to_c import CppModel, CppNumerics
 HERE = Path(__file__).resolve().parent
 
 
-def build_model(level, outer="wall"):
+def build_model(level, outer="wall", dimension=3):
     """Build the declarative model with its boundary conditions.
 
-    ``outer`` selects the single physical boundary tag the bundled ``mesh.geo``
-    exposes: a reflective ``wall`` (default) or zero-gradient ``extrapolation``.
-    Add more tags here exactly like zoomy_foam does — the BCs lower to the
-    indexed-Piecewise ``boundary_conditions(bc_idx, …)`` kernel automatically.
+    ``dimension`` is the SME convention (n horizontal + 1 vertical): use 3 for a
+    2-D run (state ``[b, h, q_x_0, q_y_0, …]``, spatial ``dimension=2`` in the
+    header) and 2 for a 1-D run. The flux is rotationally invariant (normal-
+    projected), so the same kernels drive an unstructured 2-D mesh via the
+    per-face normal in the Riemann solver.
+
+    ``outer`` selects the single physical boundary tag the bundled mesh exposes:
+    a reflective ``wall`` (default) or zero-gradient ``extrapolation``. Add more
+    tags here exactly like zoomy_foam does — the BCs lower to the indexed
+    ``boundary_conditions(bc_idx, …)`` kernel automatically.
     """
     outer_bc = (
         FromModel(tag="outer", definition="wall")
         if outer == "wall"
         else Extrapolation(tag="outer")
     )
-    return SME(level=level, boundary_conditions=BoundaryConditions([outer_bc]))
+    return SME(level=level, dimension=dimension,
+               boundary_conditions=BoundaryConditions([outer_bc]))
 
 
-def emit(level, out=HERE, outer="wall", what="both"):
-    model = build_model(level, outer=outer)
+def emit(level, out=HERE, outer="wall", what="both", dimension=3):
+    model = build_model(level, outer=outer, dimension=dimension)
     sm = model.system_model
 
     if what in ("both", "model"):
@@ -69,7 +76,7 @@ def emit(level, out=HERE, outer="wall", what="both"):
         print(f"wrote {out / 'Numerics.H'}")
 
     print(
-        f"SME(level={level}, outer={outer}) "
+        f"SME(level={level}, dimension={dimension}, outer={outer}) "
         f"state={[str(s) for s in sm.state]}"
     )
 
@@ -84,5 +91,7 @@ if __name__ == "__main__":
     ap.add_argument(
         "--what", choices=["both", "model", "numerics"], default="both"
     )
+    ap.add_argument("--dimension", type=int, default=3,
+                    help="SME dimension convention: 3 => 2-D run, 2 => 1-D")
     a = ap.parse_args()
-    emit(a.level, a.out, outer=a.outer, what=a.what)
+    emit(a.level, a.out, outer=a.outer, what=a.what, dimension=a.dimension)

@@ -11,9 +11,10 @@
 #include <iostream>
 #include <memory>
 
+#include "UserFunctions.H"   // must precede Model.H (pulled in via Numerics.H)
 #include "Numerics.H"
 #include "Settings.hpp"
-#include "Model.H"      
+#include "Model.H"
 #include "IOManager.hpp"
 #include "MeshConfigLoader.hpp"
 

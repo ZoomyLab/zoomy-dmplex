@@ -138,7 +138,7 @@ public:
                 // Model::update_variables (the Q post-clamp) was dropped from the
                 // SystemModel-path printer; Q is left as-is and only the aux state
                 // is recomputed from Q via update_aux_variables.
-                auto res_a = Model<T>::update_aux_variables(q, a, parameters.data());
+                auto res_a = Model<T>::update_aux_variables(q, a, parameters.data(), 0.0);
                 for(int i=0; i<Model<T>::n_dof_qaux; ++i) a[i] = res_a[i];
             }
         }
@@ -238,8 +238,8 @@ public:
                 reconstructorAux->Reconstruct(aL_cell, nullptr, cgL->centroid, fg->centroid, NULL, NULL, aL_face);
                 reconstructorAux->Reconstruct(aR_cell, nullptr, cgR->centroid, fg->centroid, NULL, NULL, aR_face);
 
-                auto res_aL = Model<T>::update_aux_variables(qL_face, aL_face, parameters.data()); for(int i=0; i<Model<T>::n_dof_qaux; ++i) aL_face[i] = res_aL[i];
-                auto res_aR = Model<T>::update_aux_variables(qR_face, aR_face, parameters.data()); for(int i=0; i<Model<T>::n_dof_qaux; ++i) aR_face[i] = res_aR[i];
+                auto res_aL = Model<T>::update_aux_variables(qL_face, aL_face, parameters.data(), 0.0); for(int i=0; i<Model<T>::n_dof_qaux; ++i) aL_face[i] = res_aL[i];
+                auto res_aR = Model<T>::update_aux_variables(qR_face, aR_face, parameters.data(), 0.0); for(int i=0; i<Model<T>::n_dof_qaux; ++i) aR_face[i] = res_aR[i];
 
                 SimpleArray<T, Model<T>::n_dof_q> flux; for(int i=0; i<Model<T>::n_dof_q; ++i) flux[i] = 0.0;
                 if (cons_flux_kernel) flux = cons_flux_kernel(qL_face, qR_face, aL_face, aR_face, parameters.data(), n_hat);
@@ -301,12 +301,12 @@ public:
                     reconstructor->Reconstruct(qL_cell, gL_cell, cgL->centroid, fg->centroid, minL, maxL, qL_face);
                     PetscScalar aL_face[Model<T>::n_dof_qaux];
                     reconstructorAux->Reconstruct(aL_cell, nullptr, cgL->centroid, fg->centroid, NULL, NULL, aL_face);
-                    auto res_aL = Model<T>::update_aux_variables(qL_face, aL_face, parameters.data());
+                    auto res_aL = Model<T>::update_aux_variables(qL_face, aL_face, parameters.data(), 0.0);
                     for(int i=0; i<Model<T>::n_dof_qaux; ++i) aL_face[i] = res_aL[i];
                     auto qR_arr = Model<T>::boundary_conditions(bc_idx, qL_face, aL_face, parameters.data(), n_hat, fg->centroid, time, 0.0);
                     PetscScalar *qR_face = qR_arr.data;
                     PetscScalar aR_face[Model<T>::n_dof_qaux];
-                    auto res_aR = Model<T>::update_aux_variables(qR_face, aL_face, parameters.data());
+                    auto res_aR = Model<T>::update_aux_variables(qR_face, aL_face, parameters.data(), 0.0);
                     for(int i=0; i<Model<T>::n_dof_qaux; ++i) aR_face[i] = res_aR[i];
                     SimpleArray<T, Model<T>::n_dof_q> flux; for(int i=0; i<Model<T>::n_dof_q; ++i) flux[i] = 0.0;
                     if (cons_flux_kernel) flux = cons_flux_kernel(qL_face, qR_face, aL_face, aR_face, parameters.data(), n_hat);
