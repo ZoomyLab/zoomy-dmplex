@@ -1,19 +1,20 @@
 {
-    "name": "SME",
+    "name": "SME0_malpasset",
     "io": {
         "directory": "outputs/dmplex",
         "filename": "dmplex",
-        "snapshots": 100,
+        "snapshots": 20,
         "snapshot_logic": "interpolate",
         "clean_directory": true,
         "mesh_path": "./../../data/malpasset/geo_malpasset-small.msh",
-        "initial_condition_file": "../../data/malpasset/geo_malpasset-small.msh",
+        "initial_condition_file": "./ic_wet.h5",
         "initial_condition_mask": [0, 1],
         "write_3d": false
     },
     "solver": {
-        "t_end": 1.0,
-        "cfl": 0.5,
-        "reconstruction_order": 1
+        "t_end": 30.0,
+        "cfl": 0.4,
+        "reconstruction_order": 1,
+        "time_integration": "splitting"
     }
 }

@@ -1,0 +1,12 @@
+obj_cpu/
+obj_gpu/
+solver_cpu
+solver_gpu
+outputs/
+figures/
+*.vtu
+*.vtu.series
+*.h5
+wet_dambreak.msh
+rect_dambreak.msh
+__pycache__/
