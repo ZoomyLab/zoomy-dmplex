@@ -45,8 +45,8 @@ public:
         if (config_reconstruction_order == 2) {
             transport->SetReconstruction(std::make_shared<LinearReconstructor<Real>>(Model<Real>::n_dof_q, config_use_limiters));
             auto grad = std::make_shared<GreenGaussGradient<Real>>();
-            grad->SetBCFunction([](int idx, const Real* p, const Real* c, const Real* n, const Real* x, Real t, Real dx, Real* out) {
-                auto res = Model<Real>::boundary_conditions(idx, p, c, n, x, t, dx);
+            grad->SetBCFunction([this](int idx, const Real* q, const Real* qaux, const Real* n, const Real* x, Real t, Real dx, Real* out) {
+                auto res = Model<Real>::boundary_conditions(idx, q, qaux, parameters.data(), n, x, t, dx);
                 for(int i=0; i<Model<Real>::n_dof_q; ++i) out[i] = res[i];
             });
             transport->SetGradient(grad);
@@ -173,7 +173,7 @@ public:
         const int n_aux = Model<Real>::n_dof_qaux;
         const Real eps = 1e-7;
 
-        auto qR_base = Model<Real>::boundary_conditions(bc_idx, qL, aL, n, centroid, time, 0.0);
+        auto qR_base = Model<Real>::boundary_conditions(bc_idx, qL, aL, params, n, centroid, time, 0.0);
         PetscScalar aR_base[n_aux];
         if (n_aux > 0) {
              auto res = Model<Real>::update_aux_variables(qR_base.data, aL, params); 
@@ -195,7 +195,7 @@ public:
                 for(int k=0; k<n_aux; ++k) aL_p[k] = res_a[k];
             }
 
-            auto qR_p = Model<Real>::boundary_conditions(bc_idx, qL_p, aL_p, n, centroid, time, 0.0);
+            auto qR_p = Model<Real>::boundary_conditions(bc_idx, qL_p, aL_p, params, n, centroid, time, 0.0);
             PetscScalar aR_p[n_aux];
             if (n_aux > 0) {
                 auto res_ar = Model<Real>::update_aux_variables(qR_p.data, aL_p, params);

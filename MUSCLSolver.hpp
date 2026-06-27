@@ -35,9 +35,15 @@ public:
         SetLimiters(settings.solver.limiter != "none");
         PetscCall(InitializeComponents());
 
-        std::vector<std::string> names = {"b", "h", "u", "v", "w", "p"};
-        PetscCall(io->Setup3D(dmQ, 6, names));
+        // Output field names derived generically from the model state count
+        // (the generated Model.H sets n_dof_q); no hard-coded SWE layout.
+        std::vector<std::string> names;
+        for (int i = 0; i < Model<Real>::n_dof_q; ++i) names.push_back("q" + std::to_string(i));
+        PetscCall(io->Setup3D(dmQ, Model<Real>::n_dof_q, names));
         PetscCall(this->SetupInitialConditions());
+        // Aux state is not loaded from the IC file; derive it from the loaded Q
+        // (update_aux_variables) so it is valid for the first ComputeTimeStep.
+        PetscCall(EnforcePhysicalConstraints(X));
 
         // Select the time integrator from settings (jax-style), unless one was
         // already set explicitly (e.g. from main.cpp). "splitting" is the explicit

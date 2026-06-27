@@ -211,10 +211,26 @@ protected:
         return PETSC_SUCCESS;
     }
 
-    static PetscErrorCode ICWrapper(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nf, PetscScalar u[], void *ctx) { Real* params = (Real*)ctx; auto res = Model<Real>::initial_condition(x, params); for(int i=0; i<Nf; ++i) u[i] = res[i]; return PETSC_SUCCESS; }
-    static PetscErrorCode AuxWrapper(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nf, PetscScalar u[], void *ctx) { Real* params = (Real*)ctx; auto res = Model<Real>::initial_aux_condition(x, params); for(int i=0; i<Nf; ++i) u[i] = res[i]; return PETSC_SUCCESS; }
-    virtual PetscErrorCode SetupInitialConditions() { PetscErrorCode (*funcs[1])(PetscInt, PetscReal, const PetscReal[], PetscInt, PetscScalar[], void*) = { ICWrapper }; void* ctxs[1] = { parameters.data() }; PetscCall(DMProjectFunction(dmQ, 0.0, funcs, ctxs, INSERT_ALL_VALUES, X)); PetscCall(TSSetSolution(ts, X)); return PETSC_SUCCESS; }
-    virtual PetscErrorCode SetupAuxiliaryConditions() { PetscErrorCode (*funcs[1])(PetscInt, PetscReal, const PetscReal[], PetscInt, PetscScalar[], void*) = { AuxWrapper }; void* ctxs[1] = { parameters.data() }; PetscCall(DMProjectFunction(dmAux, 0.0, funcs, ctxs, INSERT_ALL_VALUES, A)); return PETSC_SUCCESS; }
+    // Initial conditions come from a file now: the SystemModel-path Model.H no
+    // longer emits initial_condition()/initial_aux_condition(). Q is loaded from
+    // settings.io.initial_condition_file (written by generate_ic.py); the aux
+    // state is derived from Q via update_aux_variables (the solver refreshes it
+    // before the first time step — see MUSCLSolver::Run).
+    virtual PetscErrorCode SetupInitialConditions() {
+        PetscFunctionBeginUser;
+        if (settings.io.initial_condition_file.empty()) {
+            SETERRQ(PETSC_COMM_WORLD, PETSC_ERR_SUP,
+                "No io.initial_condition_file set: the model no longer provides "
+                "initial_condition(); generate one with generate_ic.py.");
+        }
+        std::vector<PetscInt> fields(settings.io.initial_condition_mask.begin(),
+                                     settings.io.initial_condition_mask.end());
+        PetscCall(io->LoadSolution(X, dmQ, settings.io.initial_condition_file, fields));
+        PetscCall(TSSetSolution(ts, X));
+        PetscFunctionReturn(PETSC_SUCCESS);
+    }
+    // Aux is recomputed from Q via update_aux_variables; nothing to project here.
+    virtual PetscErrorCode SetupAuxiliaryConditions() { return PETSC_SUCCESS; }
     
     PetscReal ComputeTimeStep() {
         Vec X_loc, A_loc; const PetscScalar *x, *a;

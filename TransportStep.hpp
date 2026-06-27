@@ -135,9 +135,10 @@ public:
             PetscInt offQ, offA; PetscCall(PetscSectionGetOffset(sQ, c, &offQ)); PetscCall(PetscSectionGetOffset(sAux, c, &offA));
             if (offQ >= 0 && (offQ + Model<T>::n_dof_q) <= size_q && offA >= 0 && (offA + Model<T>::n_dof_qaux) <= size_a) {
                 PetscScalar *q = &x_ptr[offQ]; PetscScalar *a = &a_ptr[offA];
-                auto res_q = Model<T>::update_variables(q, a, parameters.data()); 
-                for(int i=0; i<Model<T>::n_dof_q; ++i) q[i] = res_q[i];
-                auto res_a = Model<T>::update_aux_variables(q, a, parameters.data()); 
+                // Model::update_variables (the Q post-clamp) was dropped from the
+                // SystemModel-path printer; Q is left as-is and only the aux state
+                // is recomputed from Q via update_aux_variables.
+                auto res_a = Model<T>::update_aux_variables(q, a, parameters.data());
                 for(int i=0; i<Model<T>::n_dof_qaux; ++i) a[i] = res_a[i];
             }
         }
@@ -302,7 +303,7 @@ public:
                     reconstructorAux->Reconstruct(aL_cell, nullptr, cgL->centroid, fg->centroid, NULL, NULL, aL_face);
                     auto res_aL = Model<T>::update_aux_variables(qL_face, aL_face, parameters.data());
                     for(int i=0; i<Model<T>::n_dof_qaux; ++i) aL_face[i] = res_aL[i];
-                    auto qR_arr = Model<T>::boundary_conditions(bc_idx, qL_face, aL_face, n_hat, fg->centroid, time, 0.0);
+                    auto qR_arr = Model<T>::boundary_conditions(bc_idx, qL_face, aL_face, parameters.data(), n_hat, fg->centroid, time, 0.0);
                     PetscScalar *qR_face = qR_arr.data;
                     PetscScalar aR_face[Model<T>::n_dof_qaux];
                     auto res_aR = Model<T>::update_aux_variables(qR_face, aL_face, parameters.data());
