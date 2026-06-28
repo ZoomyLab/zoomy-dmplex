@@ -29,8 +29,8 @@ struct SimpleArray {
 template <typename T>
 struct Model {
     static constexpr int n_dof_q    = 4;
-    static constexpr int n_dof_qaux = 7;
-    static constexpr int n_parameters = 6;
+    static constexpr int n_dof_qaux = 9;
+    static constexpr int n_parameters = 5;
     static constexpr int dimension  = 2;
     static constexpr int n_dof_gradQ = 0;
     static constexpr bool has_diffusion = false;
@@ -39,8 +39,8 @@ struct Model {
     static constexpr int idx_h = 1;
     static constexpr int n_boundary_tags = 1;
     static const std::vector<std::string> get_boundary_tags() { return { "default" }; }
-    static const std::vector<std::string> parameter_names() { return { "g", "rho", "nu", "lambda_s", "e_x", "wet_dry_eps" }; }
-    static const std::vector<T> default_parameters() { return { 9.81, 1.0, 1.0, 0.5, 0.0, 0.01 }; }
+    static const std::vector<std::string> parameter_names() { return { "g", "rho", "nu", "lambda_s", "e_x" }; }
+    static const std::vector<T> default_parameters() { return { 9.81, 1.0, 0.0, 0.0, 0.0 }; }
     PORTABLE_FN static inline SimpleArray<T, 4> flux_x(
         const T* Q,
         const T* Qaux,
@@ -49,8 +49,8 @@ struct Model {
     SimpleArray<T, 4> res;
     res[0] = 0;
     res[1] = Q[2];
-    res[2] = Qaux[6]*std::pow(Q[2], 2);
-    res[3] = Qaux[6]*Q[2]*Q[3];
+    res[2] = Qaux[8]*std::pow(Q[2], 2);
+    res[3] = Qaux[8]*Q[2]*Q[3];
     return res;
     }
 
@@ -62,8 +62,8 @@ struct Model {
     SimpleArray<T, 4> res;
     res[0] = 0;
     res[1] = Q[3];
-    res[2] = Qaux[6]*Q[2]*Q[3];
-    res[3] = Qaux[6]*std::pow(Q[3], 2);
+    res[2] = Qaux[8]*Q[2]*Q[3];
+    res[3] = Qaux[8]*std::pow(Q[3], 2);
     return res;
     }
 
@@ -123,7 +123,7 @@ struct Model {
         const T* p)
     {
     T t0 = p[0]*Q[1];
-    T t1 = Qaux[6]*Q[2];
+    T t1 = Qaux[8]*Q[2];
     SimpleArray<T, 16> res;
     res[0] = 0;
     res[1] = 0;
@@ -139,7 +139,7 @@ struct Model {
     res[11] = 0;
     res[12] = 0;
     res[13] = 0;
-    res[14] = Qaux[6]*Q[3];
+    res[14] = Qaux[8]*Q[3];
     res[15] = t1;
     return res;
     }
@@ -149,7 +149,7 @@ struct Model {
         const T* Qaux,
         const T* p)
     {
-    T t0 = Qaux[6]*Q[3];
+    T t0 = Qaux[8]*Q[3];
     T t1 = p[0]*Q[1];
     SimpleArray<T, 16> res;
     res[0] = 0;
@@ -163,7 +163,7 @@ struct Model {
     res[8] = 0;
     res[9] = 0;
     res[10] = t0;
-    res[11] = Qaux[6]*Q[2];
+    res[11] = Qaux[8]*Q[2];
     res[12] = t1;
     res[13] = t1;
     res[14] = 0;
@@ -177,14 +177,16 @@ struct Model {
         const T* p,
         const T* n)
     {
-    T t0 = std::pow(p[0], 1.0/2.0)*std::pow(std::max(Q[1], p[5]), 1.0/2.0);
-    T t1 = n[0]*Q[2] + n[1]*Q[3];
-    T t2 = Qaux[6]*t1;
+    T t0 = n[0]*Q[2];
+    T t1 = n[1]*Q[3];
+    T t2 = std::pow(Qaux[8], 2);
+    T t3 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::pow(Q[1], 5), 1.0/2.0);
+    T t4 = Q[1]*t0 + Q[1]*t1;
     SimpleArray<T, 4> res;
     res[0] = 0;
-    res[1] = Qaux[6]*t1 - t0;
-    res[2] = t0 + t2;
-    res[3] = t2;
+    res[1] = Qaux[8]*(t0 + t1);
+    res[2] = t2*(t3 + t4);
+    res[3] = t2*(-t3 + t4);
     return res;
     }
 
@@ -193,12 +195,12 @@ struct Model {
         const T* Qaux,
         const T* p)
     {
-    T t0 = Qaux[6]*p[3]/p[1];
+    T t0 = 2/p[1];
     SimpleArray<T, 4> res;
     res[0] = 0;
     res[1] = 0;
-    res[2] = p[4]*p[0]*Q[1] - Q[2]*t0;
-    res[3] = -Q[3]*t0;
+    res[2] = Qaux[0]*t0 + p[4]*p[0]*Q[1];
+    res[3] = Qaux[1]*t0;
     return res;
     }
 
@@ -207,16 +209,16 @@ struct Model {
         const T* Qaux,
         const T* p)
     {
-    T t0 = Qaux[6]*Q[2]*Q[3];
+    T t0 = Qaux[8]*Q[2]*Q[3];
     SimpleArray<T, 8> res;
     res[0] = 0;
     res[1] = 0;
     res[2] = Q[2];
     res[3] = Q[3];
-    res[4] = Qaux[6]*std::pow(Q[2], 2);
+    res[4] = Qaux[8]*std::pow(Q[2], 2);
     res[5] = t0;
     res[6] = t0;
-    res[7] = Qaux[6]*std::pow(Q[3], 2);
+    res[7] = Qaux[8]*std::pow(Q[3], 2);
     return res;
     }
 
@@ -267,7 +269,6 @@ struct Model {
         const T* Qaux,
         const T* p)
     {
-    T t0 = -Qaux[6]*p[3]/p[1];
     SimpleArray<T, 16> res;
     res[0] = 0;
     res[1] = 0;
@@ -279,22 +280,22 @@ struct Model {
     res[7] = 0;
     res[8] = 0;
     res[9] = p[4]*p[0];
-    res[10] = t0;
+    res[10] = 0;
     res[11] = 0;
     res[12] = 0;
     res[13] = 0;
     res[14] = 0;
-    res[15] = t0;
+    res[15] = 0;
     return res;
     }
 
-    PORTABLE_FN static inline SimpleArray<T, 28> source_jacobian_wrt_aux_variables(
+    PORTABLE_FN static inline SimpleArray<T, 36> source_jacobian_wrt_aux_variables(
         const T* Q,
         const T* Qaux,
         const T* p)
     {
-    T t0 = p[3]/p[1];
-    SimpleArray<T, 28> res;
+    T t0 = 2/p[1];
+    SimpleArray<T, 36> res;
     res[0] = 0;
     res[1] = 0;
     res[2] = 0;
@@ -313,16 +314,24 @@ struct Model {
     res[15] = 0;
     res[16] = 0;
     res[17] = 0;
-    res[18] = 0;
+    res[18] = t0;
     res[19] = 0;
-    res[20] = -Q[2]*t0;
+    res[20] = 0;
     res[21] = 0;
     res[22] = 0;
     res[23] = 0;
     res[24] = 0;
     res[25] = 0;
     res[26] = 0;
-    res[27] = -Q[3]*t0;
+    res[27] = 0;
+    res[28] = t0;
+    res[29] = 0;
+    res[30] = 0;
+    res[31] = 0;
+    res[32] = 0;
+    res[33] = 0;
+    res[34] = 0;
+    res[35] = 0;
     return res;
     }
 
@@ -330,33 +339,35 @@ struct Model {
     //   no pointwise state remap on this SystemModel; the solver
     //   leaves Q unchanged after the transport step.
 
-    PORTABLE_FN static inline SimpleArray<T, 7> update_aux_variables(
+    PORTABLE_FN static inline SimpleArray<T, 9> update_aux_variables(
         const T* Q,
         const T* Qaux,
         const T* p,
         const T dt)
     {
-    SimpleArray<T, 7> res;
+    SimpleArray<T, 9> res;
     res[0] = Qaux[0];
     res[1] = Qaux[1];
     res[2] = Qaux[2];
     res[3] = Qaux[3];
     res[4] = Qaux[4];
     res[5] = Qaux[5];
-    res[6] = std::pow(2, 1.0/2.0)*std::max((T)0, Q[1])/std::pow(std::pow(Q[1], 4) + std::pow(std::max(Q[1], p[5]), 4), 1.0/2.0);
+    res[6] = Qaux[6];
+    res[7] = Qaux[7];
+    res[8] = std::pow(2, 1.0/2.0)*std::max((T)0, Q[1])/std::pow(std::pow(Q[1], 4) + std::pow(std::max((T)1.0e-8, Q[1]), 4), 1.0/2.0);
     return res;
     }
 
-    PORTABLE_FN static inline SimpleArray<T, 28> update_aux_variables_jacobian_wrt_variables(
+    PORTABLE_FN static inline SimpleArray<T, 36> update_aux_variables_jacobian_wrt_variables(
         const T* Q,
         const T* Qaux,
         const T* p,
         const T dt)
     {
     T t0 = std::pow(2, 1.0/2.0);
-    T t1 = std::max(Q[1], p[5]);
+    T t1 = std::max((T)1.0e-8, Q[1]);
     T t2 = std::pow(Q[1], 4) + std::pow(t1, 4);
-    SimpleArray<T, 28> res;
+    SimpleArray<T, 36> res;
     res[0] = 0;
     res[1] = 0;
     res[2] = 0;
@@ -370,11 +381,11 @@ struct Model {
     res[10] = 0;
     res[11] = 0;
     res[12] = 0;
-    res[13] = t0*Heaviside(Q[1], 1.0/2.0)/std::pow(t2, 1.0/2.0) + t0*(-2*std::pow(Q[1], 3) - 2*std::pow(t1, 3)*Heaviside(Q[1] - p[5], 1.0/2.0))*std::max((T)0, Q[1])/std::pow(t2, 3.0/2.0);
+    res[13] = 0;
     res[14] = 0;
     res[15] = 0;
     res[16] = 0;
-    res[17] = 0;
+    res[17] = t0*Heaviside(Q[1], 1.0/2.0)/std::pow(t2, 1.0/2.0) + t0*(-2*std::pow(Q[1], 3) - 2*std::pow(t1, 3)*Heaviside(Q[1] - 1.0e-8, 1.0/2.0))*std::max((T)0, Q[1])/std::pow(t2, 3.0/2.0);
     res[18] = 0;
     res[19] = 0;
     res[20] = 0;
@@ -385,6 +396,14 @@ struct Model {
     res[25] = 0;
     res[26] = 0;
     res[27] = 0;
+    res[28] = 0;
+    res[29] = 0;
+    res[30] = 0;
+    res[31] = 0;
+    res[32] = 0;
+    res[33] = 0;
+    res[34] = 0;
+    res[35] = 0;
     return res;
     }
 
@@ -394,18 +413,18 @@ struct Model {
         const T dt,
         const ZoomyMesh& mesh)
     {
-    // Qaux[0] (dq_x0dx) = D^(1, 0) Q[2]
-    compute_derivative(Qaux[0], Q[2], 1, 0, 0, mesh);
-    // Qaux[1] (dhdx) = D^(1, 0) Q[1]
-    compute_derivative(Qaux[1], Q[1], 1, 0, 0, mesh);
-    // Qaux[2] (dq_y0dy) = D^(0, 1) Q[3]
-    compute_derivative(Qaux[2], Q[3], 0, 1, 0, mesh);
-    // Qaux[3] (dhdy) = D^(0, 1) Q[1]
-    compute_derivative(Qaux[3], Q[1], 0, 1, 0, mesh);
-    // Qaux[4] (dbdx) = D^(1, 0) Q[0]
-    compute_derivative(Qaux[4], Q[0], 1, 0, 0, mesh);
-    // Qaux[5] (dbdy) = D^(0, 1) Q[0]
-    compute_derivative(Qaux[5], Q[0], 0, 1, 0, mesh);
+    // Qaux[2] (dq_x0dx) = D^(1, 0) Q[2]
+    compute_derivative(Qaux[2], Q[2], 1, 0, 0, mesh);
+    // Qaux[3] (dhdx) = D^(1, 0) Q[1]
+    compute_derivative(Qaux[3], Q[1], 1, 0, 0, mesh);
+    // Qaux[4] (dq_y0dy) = D^(0, 1) Q[3]
+    compute_derivative(Qaux[4], Q[3], 0, 1, 0, mesh);
+    // Qaux[5] (dhdy) = D^(0, 1) Q[1]
+    compute_derivative(Qaux[5], Q[1], 0, 1, 0, mesh);
+    // Qaux[6] (dbdx) = D^(1, 0) Q[0]
+    compute_derivative(Qaux[6], Q[0], 1, 0, 0, mesh);
+    // Qaux[7] (dbdy) = D^(0, 1) Q[0]
+    compute_derivative(Qaux[7], Q[0], 0, 1, 0, mesh);
     }
 
     // initial_condition: NOT emitted from the SystemModel (provide solver-side).
@@ -458,7 +477,7 @@ struct Model {
     res[1] = Q[1];
     res[2] = t1;
     res[3] = t2;
-    res[4] = Qaux[4]*t1 + Qaux[5]*t2 + Qaux[1]*t1*X[2] + Qaux[3]*t2*X[2] - Qaux[0]*X[2] - Qaux[2]*X[2];
+    res[4] = Qaux[6]*t1 + Qaux[7]*t2 + Qaux[3]*t1*X[2] + Qaux[5]*t2*X[2] - Qaux[2]*X[2] - Qaux[4]*X[2];
     res[5] = -p[0]*Q[1]*p[1]*X[2] + p[0]*Q[1]*p[1];
     return res;
     }
@@ -498,7 +517,7 @@ struct Model {
     return default_res;
     }
 
-    PORTABLE_FN static inline SimpleArray<T, 7> aux_boundary_conditions(
+    PORTABLE_FN static inline SimpleArray<T, 8> aux_boundary_conditions(
         const int bc_idx,
         const T* Q,
         const T* Qaux,
@@ -509,7 +528,7 @@ struct Model {
         const T dX)
     {
     if (bc_idx == 0) {
-        SimpleArray<T, 7> res;
+        SimpleArray<T, 8> res;
         res[0] = Qaux[0];
         res[1] = Qaux[1];
         res[2] = Qaux[2];
@@ -517,9 +536,10 @@ struct Model {
         res[4] = Qaux[4];
         res[5] = Qaux[5];
         res[6] = Qaux[6];
+        res[7] = Qaux[7];
         return res;
     }
-    SimpleArray<T, 7> default_res = {0};
+    SimpleArray<T, 8> default_res = {0};
     return default_res;
     }
 

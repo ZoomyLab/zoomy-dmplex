@@ -74,40 +74,43 @@ struct Numerics {
         const T* n)
     {
     T t0 = -std::max(Q_minus[0], Q_plus[0]);
-    T t1 = Q_minus[0] + Q_minus[1] + t0;
-    T t2 = std::max((T)0.0, t1);
-    T t3 = Q_plus[0] + Q_plus[1] + t0;
-    T t4 = std::max((T)0.0, t3);
-    T t5 = (1.0 / std::pow(t2 + 1.0e-14, 1));
-    T t6 = t2/std::max((T)1.0e-14, Q_minus[1]);
-    T t7 = Q_minus[2]*t6;
-    T t8 = Q_minus[3]*t6;
-    T t9 = n[0]*t7 + n[1]*t8;
-    T t10 = (1.0 / std::pow(t4 + 1.0e-14, 1));
-    T t11 = (1.0 / std::pow(std::max((T)1.0e-14, Q_plus[1]), 1));
-    T t12 = t11*t4;
-    T t13 = Q_plus[2]*n[0]*t12 + Q_plus[3]*n[1]*t12;
-    T t14 = std::pow(p[0], 1.0/2.0);
-    T t15 = t14*std::pow(std::max(t1, p[5]), 1.0/2.0);
-    T t16 = t5*t9;
-    T t17 = t14*std::pow(std::max(t3, p[5]), 1.0/2.0);
-    T t18 = t10*t13;
-    T t19 = 0.5*std::max(t10*std::fabs(t13), std::max(t5*std::fabs(t9), std::max(std::fabs(t15 + t16), std::max(std::fabs(t17 + t18), std::max(std::fabs(t15 - t16), std::fabs(t17 - t18))))));
-    T t20 = t19*(-t2 + t4);
-    T t21 = (1.0/2.0)*p[0];
-    T t22 = -std::pow(Q_plus[1], 2)*t21 + (1.0/2.0)*p[0]*std::pow(t4, 2);
-    T t23 = t19*(Q_plus[2]*t11*t4 - t7);
-    T t24 = t19*(Q_plus[3]*t11*t4 - t8);
-    T t25 = std::pow(Q_minus[1], 2)*t21 - std::pow(t2, 2)*t21;
+    T t1 = std::max((T)0.0, Q_minus[0] + Q_minus[1] + t0);
+    T t2 = std::max((T)0.0, Q_plus[0] + Q_plus[1] + t0);
+    T t3 = t1 + 1.0e-14;
+    T t4 = (1.0 / std::pow(std::max((T)1.0e-14, Q_minus[1]), 1));
+    T t5 = t1*t4;
+    T t6 = Q_minus[2]*t5;
+    T t7 = Q_minus[3]*t5;
+    T t8 = t2 + 1.0e-14;
+    T t9 = (1.0 / std::pow(std::max((T)1.0e-14, Q_plus[1]), 1));
+    T t10 = t2*t9;
+    T t11 = (1.0 / std::pow(t3, 2));
+    T t12 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0);
+    T t13 = std::pow(t1, 5.0/2.0)*t12;
+    T t14 = std::pow(t1, 2);
+    T t15 = t14*t4;
+    T t16 = Q_minus[2]*n[0]*t15 + Q_minus[3]*n[1]*t15;
+    T t17 = (1.0 / std::pow(t8, 2));
+    T t18 = t12*std::pow(t2, 5.0/2.0);
+    T t19 = std::pow(t2, 2);
+    T t20 = t19*t9;
+    T t21 = Q_plus[2]*n[0]*t20 + Q_plus[3]*n[1]*t20;
+    T t22 = 0.5*std::max(t11*std::fabs(t13 + t16), std::max(t17*std::fabs(t18 + t21), std::max(t11*std::fabs(t13 - t16), std::max(t17*std::fabs(t18 - t21), std::max(std::fabs(n[0]*t6 + n[1]*t7)/t3, std::fabs(Q_plus[2]*n[0]*t10 + Q_plus[3]*n[1]*t10)/t8)))));
+    T t23 = t22*(-t1 + t2);
+    T t24 = (1.0/2.0)*p[0];
+    T t25 = -std::pow(Q_plus[1], 2)*t24 + (1.0/2.0)*p[0]*t19;
+    T t26 = t22*(Q_plus[2]*t2*t9 - t6);
+    T t27 = t22*(Q_plus[3]*t2*t9 - t7);
+    T t28 = std::pow(Q_minus[1], 2)*t24 - t14*t24;
     SimpleArray<T, 8> res;
     res[0] = 0;
-    res[1] = t20;
-    res[2] = n[0]*t22 + t23;
-    res[3] = n[1]*t22 + t24;
+    res[1] = t23;
+    res[2] = n[0]*t25 + t26;
+    res[3] = n[1]*t25 + t27;
     res[4] = 0;
-    res[5] = -t20;
-    res[6] = n[0]*t25 - t23;
-    res[7] = n[1]*t25 - t24;
+    res[5] = -t23;
+    res[6] = n[0]*t28 - t26;
+    res[7] = n[1]*t28 - t27;
     return res;
     }
 
@@ -117,11 +120,13 @@ struct Numerics {
         const T* p,
         const T* n)
     {
-    T t0 = n[0]*Q[2] + n[1]*Q[3];
-    T t1 = std::pow(p[0], 1.0/2.0)*std::pow(std::max(Q[1], p[5]), 1.0/2.0);
-    T t2 = Qaux[6]*t0;
+    T t0 = n[0]*Q[2];
+    T t1 = n[1]*Q[3];
+    T t2 = std::pow(Qaux[8], 2);
+    T t3 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::pow(Q[1], 5), 1.0/2.0);
+    T t4 = Q[1]*t0 + Q[1]*t1;
     SimpleArray<T, 1> res;
-    res[0] = std::max(Qaux[6]*std::fabs(t0), std::max(std::fabs(t1 + t2), std::fabs(t1 - t2)));
+    res[0] = std::max(Qaux[8]*std::fabs(t0 + t1), std::max(t2*std::fabs(t3 + t4), t2*std::fabs(t3 - t4)));
     return res;
     }
 
