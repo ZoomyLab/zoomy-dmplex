@@ -4,11 +4,11 @@
 
 Key points (why an NSM, not the raw model):
   * The raw ``SME`` flux carries a bare ``1/h`` and blows up on a dry bed. The
-    NSM regularizes it: ``RegularizationSpec(desingularize=True)`` applies the
-    Kurganov–Petrova ``hinv`` aux (``hinv = √2·h/√(h⁴+max(h,eps)⁴)`` ≈ 1/h for
-    h≥eps, finite at h→0) and the conservative flux uses ``hinv`` instead of
-    ``1/h``. This is now a reusable core knob (REQ-67) — no thesis MalpassetSME
-    import needed.
+    NSM regularizes it AUTOMATICALLY: ``from_system_model`` runs
+    ``default_operations()`` for shallow-water transport (state with ``h``) =
+    ``[desingularize_hinv(), gate_eigenvalues_dry()]``, so the flux uses the KP
+    ``hinv`` (``√2·h/√(h⁴+max(h,eps)⁴)`` ≈ 1/h, finite at h→0) and dry cells are
+    eigenvalue-gated. No per-case opt-in, no thesis import (REQ-67, core fe2ed58).
   * ``NumericalSystemModel.from_system_model(sm, reconstruction=…, riemann=
     PositiveNonconservativeRusanov, regularization=…)`` adds the well-balanced,
     positivity-preserving Riemann + reconstruction. The C++ printers normalize
@@ -29,7 +29,6 @@ import argparse
 from pathlib import Path
 
 from zoomy_core.numerics import NumericalSystemModel, ReconstructionSpec
-from zoomy_core.numerics.numerical_system_model import RegularizationSpec
 from zoomy_core.fvm.riemann_solvers import PositiveNonconservativeRusanov
 from zoomy_core.model.models import SME
 from zoomy_core.model.boundary_conditions import (
@@ -54,13 +53,15 @@ def build_system_model(level, outer="wall", dimension=3):
                boundary_conditions=BoundaryConditions([bc])).system_model
 
 
-def emit(level, out=HERE, outer="wall", what="both", dimension=3,
-         order=1, desingularize=True):
+def emit(level, out=HERE, outer="wall", what="both", dimension=3, order=1):
     sm = build_system_model(level, outer=outer, dimension=dimension)
+    # from_system_model auto-runs default_operations() for shallow-water
+    # transport systems (state with `h`): the KP 1/h `desingularize_hinv` +
+    # `gate_eigenvalues_dry` — so the flux uses the regularized `hinv` and the
+    # dry bed is stable, with no per-case opt-in (REQ-67, core fe2ed58).
     nsm = NumericalSystemModel.from_system_model(
         sm, reconstruction=ReconstructionSpec(order=order),
-        riemann=PositiveNonconservativeRusanov,
-        regularization=RegularizationSpec(desingularize=desingularize))
+        riemann=PositiveNonconservativeRusanov)
 
     if what in ("both", "model"):
         # REQ-66 (core ae1a2aa) types Min/Max literals — no interim cast needed.
@@ -71,8 +72,7 @@ def emit(level, out=HERE, outer="wall", what="both", dimension=3,
         (out / "Numerics.H").write_text(CppNumerics(num).create_code())
         print(f"wrote {out / 'Numerics.H'}")
 
-    print(f"SME(level={level}, dim={dimension}, order={order}, "
-          f"desingularize={desingularize}) "
+    print(f"SME(level={level}, dim={dimension}, order={order}) "
           f"state={[str(s) for s in sm.state]} "
           f"aux={[str(s) for s in sm.aux_state]}")
 
@@ -86,9 +86,6 @@ if __name__ == "__main__":
     ap.add_argument("--dimension", type=int, default=3,
                     help="SME convention: 3 => 2-D run, 2 => 1-D")
     ap.add_argument("--order", type=int, default=1, help="reconstruction order")
-    ap.add_argument("--no-desingularize", dest="desingularize",
-                    action="store_false",
-                    help="disable the NSM KP 1/h hinv regularization (dry-bed unstable)")
     a = ap.parse_args()
     emit(a.level, a.out, outer=a.outer, what=a.what, dimension=a.dimension,
-         order=a.order, desingularize=a.desingularize)
+         order=a.order)
