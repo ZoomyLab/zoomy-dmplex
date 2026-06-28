@@ -7,12 +7,12 @@
         "snapshot_logic": "interpolate",
         "clean_directory": true,
         "mesh_path": "./../../data/malpasset/geo_malpasset-small.msh",
-        "initial_condition_file": "./ic_wet.h5",
+        "initial_condition_file": "./ic_malpasset.h5",
         "initial_condition_mask": [0, 1],
         "write_3d": false
     },
     "solver": {
-        "t_end": 30.0,
+        "t_end": 20.0,
         "cfl": 0.4,
         "reconstruction_order": 1,
         "time_integration": "splitting"
