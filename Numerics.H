@@ -37,16 +37,16 @@ struct Numerics {
         const T* p,
         const T* n)
     {
-    T t0 = std::max(1.0e-14, Q_minus[1]);
+    T t0 = std::max((T)1.0e-14, Q_minus[1]);
     T t1 = -std::max(Q_minus[0], Q_plus[0]);
-    T t2 = std::max(0.0, Q_minus[0] + Q_minus[1] + t1);
+    T t2 = std::max((T)0.0, Q_minus[0] + Q_minus[1] + t1);
     T t3 = t2/t0;
     T t4 = 0.5*n[0];
     T t5 = Q_minus[2]*t4;
     T t6 = 0.5*n[1];
     T t7 = Q_minus[3]*t6;
-    T t8 = std::max(1.0e-14, Q_plus[1]);
-    T t9 = std::max(0.0, Q_plus[0] + Q_plus[1] + t1);
+    T t8 = std::max((T)1.0e-14, Q_plus[1]);
+    T t9 = std::max((T)0.0, Q_plus[0] + Q_plus[1] + t1);
     T t10 = t9/t8;
     T t11 = Q_plus[2]*t4;
     T t12 = Q_plus[3]*t6;
@@ -75,16 +75,16 @@ struct Numerics {
     {
     T t0 = -std::max(Q_minus[0], Q_plus[0]);
     T t1 = Q_minus[0] + Q_minus[1] + t0;
-    T t2 = std::max(0.0, t1);
+    T t2 = std::max((T)0.0, t1);
     T t3 = Q_plus[0] + Q_plus[1] + t0;
-    T t4 = std::max(0.0, t3);
+    T t4 = std::max((T)0.0, t3);
     T t5 = (1.0 / std::pow(t2 + 1.0e-14, 1));
-    T t6 = t2/std::max(1.0e-14, Q_minus[1]);
+    T t6 = t2/std::max((T)1.0e-14, Q_minus[1]);
     T t7 = Q_minus[2]*t6;
     T t8 = Q_minus[3]*t6;
     T t9 = n[0]*t7 + n[1]*t8;
     T t10 = (1.0 / std::pow(t4 + 1.0e-14, 1));
-    T t11 = (1.0 / std::pow(std::max(1.0e-14, Q_plus[1]), 1));
+    T t11 = (1.0 / std::pow(std::max((T)1.0e-14, Q_plus[1]), 1));
     T t12 = t11*t4;
     T t13 = Q_plus[2]*n[0]*t12 + Q_plus[3]*n[1]*t12;
     T t14 = std::pow(p[0], 1.0/2.0);

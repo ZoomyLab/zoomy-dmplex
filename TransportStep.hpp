@@ -17,6 +17,17 @@ struct HasDiffusiveFlux<T, std::void_t<decltype(
         std::declval<const T*>(), std::declval<const T*>())
 )>> : std::true_type {};
 
+// SFINAE: does Model<T> have the field-level, mesh-aware update_aux_variables
+// (REQ-65) that refreshes the spatial-derivative aux via compute_derivative?
+template <typename T, typename = void>
+struct HasFieldAuxUpdate : std::false_type {};
+template <typename T>
+struct HasFieldAuxUpdate<T, std::void_t<decltype(
+    Model<T>::update_aux_variables(
+        std::declval<T* const*>(), std::declval<T* const*>(),
+        std::declval<const T>(), std::declval<const ZoomyMesh&>()))>>
+    : std::true_type {};
+
 template <typename T>
 class TransportStep {
 private:
@@ -123,7 +134,48 @@ public:
         return PETSC_SUCCESS;
     }
 
+    // Field-level, mesh-aware refresh of the spatial-derivative aux (REQ-65):
+    // de-interleave the local Q/Qaux into per-field arrays, call the model's
+    // field-level update_aux_variables (which fills the derivative slots via the
+    // real mesh-aware compute_derivative), then scatter back. No-op for models
+    // without the field-level overload (e.g. plain SWE/SME with only local aux).
+    PetscErrorCode RefreshDerivativeAux(Vec X_loc, Vec A_loc) {
+        if constexpr (HasFieldAuxUpdate<T>::value) {
+            const int nq = Model<T>::n_dof_q, na = Model<T>::n_dof_qaux;
+            PetscInt cStart, cEnd; PetscCall(DMPlexGetHeightStratum(dmQ, 0, &cStart, &cEnd));
+            PetscInt ncell = cEnd - cStart;
+            PetscInt size_q, size_a;
+            PetscCall(VecGetLocalSize(X_loc, &size_q)); PetscCall(VecGetLocalSize(A_loc, &size_a));
+            std::vector<std::vector<T>> Qf(nq, std::vector<T>(ncell, (T)0));
+            std::vector<std::vector<T>> Af(na, std::vector<T>(ncell, (T)0));
+            PetscScalar *x_ptr, *a_ptr;
+            PetscCall(VecGetArray(X_loc, &x_ptr)); PetscCall(VecGetArray(A_loc, &a_ptr));
+            PetscSection sQ, sA; PetscCall(DMGetLocalSection(dmQ, &sQ)); PetscCall(DMGetLocalSection(dmAux, &sA));
+            for (PetscInt c = cStart; c < cEnd; ++c) {
+                PetscInt oq, oa; PetscCall(PetscSectionGetOffset(sQ, c, &oq)); PetscCall(PetscSectionGetOffset(sA, c, &oa));
+                if (oq < 0 || (oq + nq) > size_q || oa < 0 || (oa + na) > size_a) continue;
+                for (int i = 0; i < nq; ++i) Qf[i][c - cStart] = x_ptr[oq + i];
+                for (int k = 0; k < na; ++k) Af[k][c - cStart] = a_ptr[oa + k];
+            }
+            std::vector<T*> Qp(nq), Ap(na);
+            for (int i = 0; i < nq; ++i) Qp[i] = Qf[i].data();
+            for (int k = 0; k < na; ++k) Ap[k] = Af[k].data();
+            ZoomyMesh mesh{dmQ, cStart, cEnd};
+            Model<T>::update_aux_variables(Qp.data(), Ap.data(), (T)0, mesh);
+            for (PetscInt c = cStart; c < cEnd; ++c) {
+                PetscInt oa; PetscCall(PetscSectionGetOffset(sA, c, &oa));
+                if (oa < 0 || (oa + na) > size_a) continue;
+                for (int k = 0; k < na; ++k) a_ptr[oa + k] = Af[k][c - cStart];
+            }
+            PetscCall(VecRestoreArray(X_loc, &x_ptr)); PetscCall(VecRestoreArray(A_loc, &a_ptr));
+        }
+        return PETSC_SUCCESS;
+    }
+
     PetscErrorCode UpdateState(Vec X_loc, Vec A_loc) {
+        // Fill the spatial-derivative aux first (field-level/mesh-aware); the
+        // per-cell pass below then preserves them and computes the local aux.
+        PetscCall(RefreshDerivativeAux(X_loc, A_loc));
         PetscScalar *x_ptr, *a_ptr;
         PetscCall(VecGetArray(X_loc, &x_ptr)); PetscCall(VecGetArray(A_loc, &a_ptr));
         PetscInt size_q, size_a;

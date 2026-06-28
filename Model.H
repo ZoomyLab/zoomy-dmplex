@@ -337,13 +337,13 @@ struct Model {
         const T dt)
     {
     SimpleArray<T, 7> res;
-    res[0] = compute_derivative(Q[2], 1, 0, 0);
-    res[1] = compute_derivative(Q[1], 1, 0, 0);
-    res[2] = compute_derivative(Q[3], 0, 1, 0);
-    res[3] = compute_derivative(Q[1], 0, 1, 0);
-    res[4] = compute_derivative(Q[0], 1, 0, 0);
-    res[5] = compute_derivative(Q[0], 0, 1, 0);
-    res[6] = std::pow(2, 1.0/2.0)*std::max((T)0.0, Q[1])/std::pow(std::pow(Q[1], 4) + std::pow(std::max(Q[1], p[5]), 4), 1.0/2.0);
+    res[0] = Qaux[0];
+    res[1] = Qaux[1];
+    res[2] = Qaux[2];
+    res[3] = Qaux[3];
+    res[4] = Qaux[4];
+    res[5] = Qaux[5];
+    res[6] = std::pow(2, 1.0/2.0)*std::max((T)0, Q[1])/std::pow(std::pow(Q[1], 4) + std::pow(std::max(Q[1], p[5]), 4), 1.0/2.0);
     return res;
     }
 
@@ -370,7 +370,7 @@ struct Model {
     res[10] = 0;
     res[11] = 0;
     res[12] = 0;
-    res[13] = t0*Heaviside(Q[1], 1.0/2.0)/std::pow(t2, 1.0/2.0) + t0*(-2*std::pow(Q[1], 3) - 2*std::pow(t1, 3)*Heaviside(Q[1] - p[5], 1.0/2.0))*std::max((T)0.0, Q[1])/std::pow(t2, 3.0/2.0);
+    res[13] = t0*Heaviside(Q[1], 1.0/2.0)/std::pow(t2, 1.0/2.0) + t0*(-2*std::pow(Q[1], 3) - 2*std::pow(t1, 3)*Heaviside(Q[1] - p[5], 1.0/2.0))*std::max((T)0, Q[1])/std::pow(t2, 3.0/2.0);
     res[14] = 0;
     res[15] = 0;
     res[16] = 0;
@@ -386,6 +386,26 @@ struct Model {
     res[26] = 0;
     res[27] = 0;
     return res;
+    }
+
+    static inline void update_aux_variables(
+        T* const* Q,
+        T* const* Qaux,
+        const T dt,
+        const ZoomyMesh& mesh)
+    {
+    // Qaux[0] (dq_x0dx) = D^(1, 0) Q[2]
+    compute_derivative(Qaux[0], Q[2], 1, 0, 0, mesh);
+    // Qaux[1] (dhdx) = D^(1, 0) Q[1]
+    compute_derivative(Qaux[1], Q[1], 1, 0, 0, mesh);
+    // Qaux[2] (dq_y0dy) = D^(0, 1) Q[3]
+    compute_derivative(Qaux[2], Q[3], 0, 1, 0, mesh);
+    // Qaux[3] (dhdy) = D^(0, 1) Q[1]
+    compute_derivative(Qaux[3], Q[1], 0, 1, 0, mesh);
+    // Qaux[4] (dbdx) = D^(1, 0) Q[0]
+    compute_derivative(Qaux[4], Q[0], 1, 0, 0, mesh);
+    // Qaux[5] (dbdy) = D^(0, 1) Q[0]
+    compute_derivative(Qaux[5], Q[0], 0, 1, 0, mesh);
     }
 
     // initial_condition: NOT emitted from the SystemModel (provide solver-side).

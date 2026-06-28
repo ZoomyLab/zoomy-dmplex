@@ -73,14 +73,8 @@ def emit(level, out=HERE, outer="wall", what="both", dimension=3,
         riemann=PositiveNonconservativeRusanov)
 
     if what in ("both", "model"):
-        code = CppModel(nsm).create_code()
-        # INTERIM (core printer bug, see ORGANIZATION.md request): Min/Max with an
-        # integer-literal arg emits e.g. `std::max(0, Q[1])` (int vs double) which
-        # fails to compile. Cast the bare-0 literal to the real type until the
-        # printer types numeric Min/Max literals itself.
-        code = (code.replace("std::max(0, ", "std::max((T)0.0, ")
-                    .replace("std::min(0, ", "std::min((T)0.0, "))
-        (out / "Model.H").write_text(code)
+        # REQ-66 (core ae1a2aa) types Min/Max literals — no interim cast needed.
+        (out / "Model.H").write_text(CppModel(nsm).create_code())
         print(f"wrote {out / 'Model.H'}")
     if what in ("both", "numerics"):
         num = PositiveNonconservativeRusanov(model=nsm)
