@@ -141,6 +141,11 @@ private:
         PetscCall(transport->UpdateState(U_loc, A_loc));
         PetscCall(DMLocalToGlobalBegin(dmQ, U_loc, INSERT_VALUES, U_global));
         PetscCall(DMLocalToGlobalEnd(dmQ, U_loc, INSERT_VALUES, U_global));
+        // Scatter the recomputed aux (e.g. hinv) back to the GLOBAL A, otherwise
+        // ComputeTimeStep reads hinv=0 -> max eigenvalue 0 -> the dt=1e-3 fallback
+        // fires every step (the run crawls). With A updated, dt is the true CFL.
+        PetscCall(DMLocalToGlobalBegin(dmAux, A_loc, INSERT_VALUES, A));
+        PetscCall(DMLocalToGlobalEnd(dmAux, A_loc, INSERT_VALUES, A));
         PetscCall(DMRestoreLocalVector(dmQ, &U_loc));
         PetscCall(DMRestoreLocalVector(dmAux, &A_loc));
         PetscFunctionReturn(PETSC_SUCCESS);
