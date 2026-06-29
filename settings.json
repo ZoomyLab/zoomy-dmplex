@@ -13,7 +13,7 @@
     },
     "solver": {
         "t_end": 20.0,
-        "cfl": 0.4,
+        "cfl": 0.45,
         "reconstruction_order": 1,
         "time_integration": "splitting"
     }

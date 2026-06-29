@@ -26,39 +26,42 @@ Usage:
     python create_model.py --no-desingularize    # plain SME (dry-bed unstable)
 """
 import argparse
+import sys
 from pathlib import Path
 
 from zoomy_core.numerics import NumericalSystemModel, ReconstructionSpec
 from zoomy_core.fvm.riemann_solvers import PositiveNonconservativeRusanov
-from zoomy_core.model.models import SME
 from zoomy_core.model.boundary_conditions import (
-    BoundaryConditions, Extrapolation, FromModel)
+    BoundaryConditions, FromModel)
 from zoomy_core.transformation.to_c import CppModel, CppNumerics
 
 HERE = Path(__file__).resolve().parent
+# MalpassetSME (carries the wet/dry momentum CLAMP via update_variables, the
+# positivity safety net the numpy/jax solver applies every step) lives in the
+# thesis Malpasset case. Core SME has no clamp and MalpassetSWE won't lower to
+# C++ (conditional+NDimArray printer bug) — so for a stable dry-bed run dmplex
+# imports this until core exposes the clamp reusably (see ORGANIZATION.md req).
+_MALPASSET_CASE = (HERE.parent.parent / "thesis" / "cases" / "malpasset_jax")
 
 
-def build_system_model(level, outer="wall", dimension=3):
-    """Build the core SME SystemModel with its boundary conditions.
-
-    Tag name ``default`` is special in VirtualSolver: meshes without
-    ``$PhysicalNames`` (the Malpasset gmsh) route ALL boundary faces to it.
-    The 1/h desingularization is applied by the NSM (``desingularize=True``),
-    not by the model — see ``emit`` (REQ-67: it is now a reusable core knob, so
-    no thesis ``MalpassetSME`` import is needed).
+def build_system_model(dimension=3):
+    """Build MalpassetSME with clamp + desingularization — the model the working
+    jax order-1 Malpasset run uses. ``clamp=True`` emits ``update_variables``
+    (caps |u|, zeros momentum below wet_dry_eps); ``desingularize=True`` gives
+    the KP ``hinv`` flux. Tag ``default`` routes ALL exterior faces to one Wall
+    BC (the Malpasset gmsh has no ``$PhysicalNames``).
     """
-    bc = (FromModel(tag="default", definition="wall")
-          if outer == "wall" else Extrapolation(tag="default"))
-    return SME(level=level, dimension=dimension,
-               boundary_conditions=BoundaryConditions([bc])).system_model
+    if str(_MALPASSET_CASE) not in sys.path:
+        sys.path.insert(0, str(_MALPASSET_CASE))
+    from sme_malpasset_model import MalpassetSME
+    m = MalpassetSME(level=0, dimension=dimension, clamp=True, desingularize=True,
+                     boundary_conditions=BoundaryConditions(
+                         [FromModel(tag="default", definition="wall")]))
+    return m.system_model
 
 
-def emit(level, out=HERE, outer="wall", what="both", dimension=3, order=1):
-    sm = build_system_model(level, outer=outer, dimension=dimension)
-    # from_system_model auto-runs default_operations() for shallow-water
-    # transport systems (state with `h`): the KP 1/h `desingularize_hinv` +
-    # `gate_eigenvalues_dry` — so the flux uses the regularized `hinv` and the
-    # dry bed is stable, with no per-case opt-in (REQ-67, core fe2ed58).
+def emit(out=HERE, what="both", dimension=3, order=0):
+    sm = build_system_model(dimension=dimension)
     nsm = NumericalSystemModel.from_system_model(
         sm, reconstruction=ReconstructionSpec(order=order),
         riemann=PositiveNonconservativeRusanov)
@@ -72,20 +75,19 @@ def emit(level, out=HERE, outer="wall", what="both", dimension=3, order=1):
         (out / "Numerics.H").write_text(CppNumerics(num).create_code())
         print(f"wrote {out / 'Numerics.H'}")
 
-    print(f"SME(level={level}, dim={dimension}, order={order}) "
+    print(f"MalpassetSME(clamp, desingularize, dim={dimension}, order={order}) "
           f"state={[str(s) for s in sm.state]} "
           f"aux={[str(s) for s in sm.aux_state]}")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--level", type=int, default=0)
     ap.add_argument("--out", type=Path, default=HERE)
-    ap.add_argument("--outer", choices=["wall", "extrapolation"], default="wall")
     ap.add_argument("--what", choices=["both", "model", "numerics"], default="both")
     ap.add_argument("--dimension", type=int, default=3,
-                    help="SME convention: 3 => 2-D run, 2 => 1-D")
-    ap.add_argument("--order", type=int, default=1, help="reconstruction order")
+                    help="SME convention: 3 => 2-D run")
+    ap.add_argument("--order", type=int, default=0,
+                    help="reconstruction order (0 = first-order FV, matches the "
+                         "working jax DG0 reference)")
     a = ap.parse_args()
-    emit(a.level, a.out, outer=a.outer, what=a.what, dimension=a.dimension,
-         order=a.order)
+    emit(a.out, what=a.what, dimension=a.dimension, order=a.order)

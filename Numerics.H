@@ -54,9 +54,9 @@ struct Numerics {
     T t14 = Q_plus[3]*t7;
     T t15 = std::pow(t3, 2);
     T t16 = std::pow((T)2, 1.0/2.0);
-    T t17 = t15*t16*std::max((T)0, t2)/(std::pow(t0, 2)*std::pow(std::pow(t3, 4) + std::pow(std::max((T)9.9999999999999998e-13, t2), 4), 1.0/2.0));
+    T t17 = t15*t16*std::max((T)0, t2)/(std::pow(t0, 2)*std::pow(std::pow(t3, 4) + std::pow(std::max(t2, p[5]), 4), 1.0/2.0));
     T t18 = std::pow(t11, 2);
-    T t19 = t16*t18*std::max((T)0, t10)/(std::pow(t9, 2)*std::pow(std::pow(t11, 4) + std::pow(std::max((T)9.9999999999999998e-13, t10), 4), 1.0/2.0));
+    T t19 = t16*t18*std::max((T)0, t10)/(std::pow(t9, 2)*std::pow(std::pow(t11, 4) + std::pow(std::max(t10, p[5]), 4), 1.0/2.0));
     T t20 = (1.0/2.0)*p[0];
     T t21 = t15*t20;
     T t22 = t18*t20;
@@ -81,17 +81,17 @@ struct Numerics {
     T t2 = std::max((T)0.0, t1);
     T t3 = Q_plus[0] + Q_plus[1] + t0;
     T t4 = std::max((T)0.0, t3);
-    T t5 = t2 > 1.0e-8;
-    T t6 = t4 > 1.0e-8;
+    T t5 = t2 > p[5];
+    T t6 = t4 > p[5];
     T t7 = std::pow((T)2, 1.0/2.0);
     T t8 = std::max((T)0, t1);
-    T t9 = std::pow(t2, 4) + std::pow(std::max((T)9.9999999999999998e-13, t1), 4);
+    T t9 = std::pow(t2, 4) + std::pow(std::max(t1, p[5]), 4);
     T t10 = (1.0 / std::pow(std::max((T)1.0e-14, Q_minus[1]), 1));
     T t11 = t10*t2;
     T t12 = Q_minus[2]*t11;
     T t13 = Q_minus[3]*t11;
     T t14 = std::max((T)0, t3);
-    T t15 = std::pow(t4, 4) + std::pow(std::max((T)9.9999999999999998e-13, t3), 4);
+    T t15 = std::pow(t4, 4) + std::pow(std::max(t3, p[5]), 4);
     T t16 = (1.0 / std::pow(std::max((T)1.0e-14, Q_plus[1]), 1));
     T t17 = t16*t4;
     T t18 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0);
@@ -130,14 +130,14 @@ struct Numerics {
         const T* p,
         const T* n)
     {
-    T t0 = Q[1] > 1.0e-8;
+    T t0 = Q[1] > p[5];
     T t1 = n[0]*Q[2];
     T t2 = n[1]*Q[3];
-    T t3 = std::pow(Qaux[8], 2);
-    T t4 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::pow(Q[1], 5), 1.0/2.0);
+    T t3 = std::pow(Qaux[6], 2);
+    T t4 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::max((T)0, std::pow(Q[1], 5)), 1.0/2.0);
     T t5 = Q[1]*t1 + Q[1]*t2;
     SimpleArray<T, 1> res;
-    res[0] = std::max(std::fabs(((t0) ? (0) : (0))), std::max(std::fabs(((t0) ? (Qaux[8]*(t1 + t2)) : (0))), std::max(std::fabs(((t0) ? (t3*(t4 + t5)) : (0))), std::fabs(((t0) ? (t3*(-t4 + t5)) : (0))))));
+    res[0] = std::max(std::fabs(((t0) ? (0) : (0))), std::max(std::fabs(((t0) ? (Qaux[6]*(t1 + t2)) : (0))), std::max(std::fabs(((t0) ? (t3*(t4 + t5)) : (0))), std::fabs(((t0) ? (t3*(-t4 + t5)) : (0))))));
     return res;
     }
 

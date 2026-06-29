@@ -17,6 +17,17 @@ struct HasDiffusiveFlux<T, std::void_t<decltype(
         std::declval<const T*>(), std::declval<const T*>())
 )>> : std::true_type {};
 
+// SFINAE: does Model<T> emit update_variables (the pointwise state post-update /
+// wet-dry momentum clamp)? Not every model has it (plain SME does not).
+template <typename T, typename = void>
+struct HasUpdateVariables : std::false_type {};
+template <typename T>
+struct HasUpdateVariables<T, std::void_t<decltype(
+    Model<T>::update_variables(
+        std::declval<const T*>(), std::declval<const T*>(),
+        std::declval<const T*>(), std::declval<const T>()))>>
+    : std::true_type {};
+
 // SFINAE: does Model<T> have the field-level, mesh-aware update_aux_variables
 // (REQ-65) that refreshes the spatial-derivative aux via compute_derivative?
 template <typename T, typename = void>
@@ -187,9 +198,15 @@ public:
             PetscInt offQ, offA; PetscCall(PetscSectionGetOffset(sQ, c, &offQ)); PetscCall(PetscSectionGetOffset(sAux, c, &offA));
             if (offQ >= 0 && (offQ + Model<T>::n_dof_q) <= size_q && offA >= 0 && (offA + Model<T>::n_dof_qaux) <= size_a) {
                 PetscScalar *q = &x_ptr[offQ]; PetscScalar *a = &a_ptr[offA];
-                // Model::update_variables (the Q post-clamp) was dropped from the
-                // SystemModel-path printer; Q is left as-is and only the aux state
-                // is recomputed from Q via update_aux_variables.
+                // Q post-update (the wet/dry momentum clamp): caps |u| and zeros
+                // momentum below wet_dry_eps. This is the positivity safety net
+                // the numpy/jax solver applies via update_variables every step —
+                // without it momentum runs away at the advancing front and h goes
+                // negative. Applied only if the model emits it (SWE/MalpassetSME).
+                if constexpr (HasUpdateVariables<T>::value) {
+                    auto res_q = Model<T>::update_variables(q, a, parameters.data(), 0.0);
+                    for(int i=0; i<Model<T>::n_dof_q; ++i) q[i] = res_q[i];
+                }
                 auto res_a = Model<T>::update_aux_variables(q, a, parameters.data(), 0.0);
                 for(int i=0; i<Model<T>::n_dof_qaux; ++i) a[i] = res_a[i];
             }
