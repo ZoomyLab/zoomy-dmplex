@@ -61,6 +61,7 @@ private:
     FluxKernelPtr cons_flux_kernel;
     NonConservativeFluxKernelPtr noncons_flux_kernel;
     SourceKernelPtr source_kernel;
+    bool do_refresh_deriv_aux = true;  // gate the per-step mesh-derivative aux refresh
 
     bool IsOwned(DM dm, PetscInt p) {
         PetscInt g_idx; 
@@ -183,10 +184,15 @@ public:
         return PETSC_SUCCESS;
     }
 
+    void SetRefreshDerivativeAux(bool b) { do_refresh_deriv_aux = b; }
+
     PetscErrorCode UpdateState(Vec X_loc, Vec A_loc) {
         // Fill the spatial-derivative aux first (field-level/mesh-aware); the
         // per-cell pass below then preserves them and computes the local aux.
-        PetscCall(RefreshDerivativeAux(X_loc, A_loc));
+        // Skippable when no kernel consumes the derivative-aux (e.g. SWE/SME(0)
+        // Rusanov use only the local hinv) — the per-step Green-Gauss is then
+        // pure overhead.
+        if (do_refresh_deriv_aux) PetscCall(RefreshDerivativeAux(X_loc, A_loc));
         PetscScalar *x_ptr, *a_ptr;
         PetscCall(VecGetArray(X_loc, &x_ptr)); PetscCall(VecGetArray(A_loc, &a_ptr));
         PetscInt size_q, size_a;

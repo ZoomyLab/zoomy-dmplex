@@ -38,6 +38,7 @@ public:
 
     PetscErrorCode InitializeComponents() {
         transport = std::make_unique<TransportStep<Real>>(dmQ, dmAux, dmGrad, parameters, boundary_map);
+        transport->SetRefreshDerivativeAux(settings.solver.refresh_derivative_aux);
         
         if (config_flux_kernel) transport->SetFluxKernel(config_flux_kernel);
         if (config_noncons_flux_kernel) transport->SetNonConsFlux(config_noncons_flux_kernel);

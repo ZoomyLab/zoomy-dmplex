@@ -17,6 +17,11 @@ struct SolverSettings {
     int reconstruction_order = 1;
     double min_dt = 1.0e-12;
     std::string limiter = "venkatakrishnan";  // "venkatakrishnan" (default), "tvd", or "none"
+    // Refresh the mesh-derivative aux (compute_derivative) every step. Needed
+    // only when a kernel consumes the derivative-aux (diffusion / higher SME);
+    // for SWE/SME(0) Rusanov (only hinv used) set false to skip the per-step
+    // Green-Gauss overhead.
+    bool refresh_derivative_aux = true;
     // Time integration, jax-style: pick the integrator from settings instead of
     // hard-coding it. "splitting" = explicit transport (SSP-RK) + implicit source
     // (default, like jax's explicit HyperbolicSolver); "imex" = explicit transport
@@ -103,6 +108,7 @@ struct Settings {
             s.solver.min_dt = jsol.value("min_dt", 1.0e-12);
             s.solver.limiter = jsol.value("limiter", "venkatakrishnan");
             s.solver.time_integration = jsol.value("time_integration", "splitting");
+            s.solver.refresh_derivative_aux = jsol.value("refresh_derivative_aux", true);
         }
 
         if (j.contains("model")) {
