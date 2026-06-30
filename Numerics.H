@@ -81,46 +81,53 @@ struct Numerics {
     T t2 = std::max((T)0.0, t1);
     T t3 = Q_plus[0] + Q_plus[1] + t0;
     T t4 = std::max((T)0.0, t3);
-    T t5 = t2 > p[5];
-    T t6 = t4 > p[5];
-    T t7 = std::pow((T)2, 1.0/2.0);
-    T t8 = std::max((T)0, t1);
-    T t9 = std::pow(t2, 4) + std::pow(std::max(t1, p[5]), 4);
-    T t10 = (1.0 / std::pow(std::max((T)1.0e-14, Q_minus[1]), 1));
-    T t11 = t10*t2;
-    T t12 = Q_minus[2]*t11;
-    T t13 = Q_minus[3]*t11;
-    T t14 = std::max((T)0, t3);
-    T t15 = std::pow(t4, 4) + std::pow(std::max(t3, p[5]), 4);
-    T t16 = (1.0 / std::pow(std::max((T)1.0e-14, Q_plus[1]), 1));
-    T t17 = t16*t4;
-    T t18 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0);
-    T t19 = t18*std::pow(t2, 5.0/2.0);
-    T t20 = std::pow(t2, 2);
-    T t21 = t10*t20;
-    T t22 = Q_minus[2]*n[0]*t21 + Q_minus[3]*n[1]*t21;
-    T t23 = 2*std::pow(t8, 2)/t9;
-    T t24 = t18*std::pow(t4, 5.0/2.0);
-    T t25 = std::pow(t4, 2);
-    T t26 = t16*t25;
-    T t27 = Q_plus[2]*n[0]*t26 + Q_plus[3]*n[1]*t26;
-    T t28 = 2*std::pow(t14, 2)/t15;
-    T t29 = 0.5*std::max(std::fabs(((t5) ? (0) : (0))), std::max(std::fabs(((t6) ? (0) : (0))), std::max(std::fabs(((t5) ? (t23*(t19 + t22)) : (0))), std::max(std::fabs(((t6) ? (t28*(t24 + t27)) : (0))), std::max(std::fabs(((t5) ? (t23*(-t19 + t22)) : (0))), std::max(std::fabs(((t6) ? (t28*(-t24 + t27)) : (0))), std::max(std::fabs(((t5) ? (t7*t8*(n[0]*t12 + n[1]*t13)/std::pow(t9, 1.0/2.0)) : (0))), std::fabs(((t6) ? (t14*t7*(Q_plus[2]*n[0]*t17 + Q_plus[3]*n[1]*t17)/std::pow(t15, 1.0/2.0)) : (0))))))))));
-    T t30 = t29*(-t2 + t4);
-    T t31 = (1.0/2.0)*p[0];
-    T t32 = -std::pow(Q_plus[1], 2)*t31 + (1.0/2.0)*p[0]*t25;
-    T t33 = t29*(Q_plus[2]*t16*t4 - t12);
-    T t34 = t29*(Q_plus[3]*t16*t4 - t13);
-    T t35 = std::pow(Q_minus[1], 2)*t31 - t20*t31;
+    T t5 = std::pow((T)2, 1.0/2.0);
+    T t6 = std::max((T)0, t1);
+    T t7 = std::pow(t2, 4) + std::pow(std::max(t1, p[5]), 4);
+    T t8 = (1.0 / std::pow(std::max((T)1.0e-14, Q_minus[1]), 1));
+    T t9 = t2*t8;
+    T t10 = Q_minus[2]*t9;
+    T t11 = Q_minus[3]*t9;
+    T t12 = std::max((T)0, t3);
+    T t13 = std::pow(t4, 4) + std::pow(std::max(t3, p[5]), 4);
+    T t14 = (1.0 / std::pow(std::max((T)1.0e-14, Q_plus[1]), 1));
+    T t15 = t14*t4;
+    T t16 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0);
+    T t17 = t16*std::pow(t2, 5.0/2.0);
+    T t18 = std::pow(t2, 2);
+    T t19 = t18*t8;
+    T t20 = Q_minus[2]*n[0]*t19 + Q_minus[3]*n[1]*t19;
+    T t21 = 2*std::pow(t6, 2)/t7;
+    T t22 = t16*std::pow(t4, 5.0/2.0);
+    T t23 = std::pow(t4, 2);
+    T t24 = t14*t23;
+    T t25 = Q_plus[2]*n[0]*t24 + Q_plus[3]*n[1]*t24;
+    T t26 = 2*std::pow(t12, 2)/t13;
+    // LOCAL FIX (TODO -> core codegen): the generated desingularized advective wave
+    // speed |q.n|(h*)^2/h / sqrt((h*)^4 + max(h*,eps)^4) collapses by (h*/eps)^2 when
+    // h* < eps, starving the Rusanov dissipation at steep wet/dry fronts -> h<0. Use
+    // the physical speed lambda = max over both states of |u.n| + sqrt(g h*)|n|, with
+    // u = q/max(1e-14,h) the TRUE velocity (cell h), h* the Audusse depth (t2,t4).
+    T nnorm = std::sqrt(n[0]*n[0] + n[1]*n[1]);
+    T uLn = (n[0]*Q_minus[2] + n[1]*Q_minus[3]) / std::max((T)1.0e-14, Q_minus[1]);
+    T uRn = (n[0]*Q_plus[2]  + n[1]*Q_plus[3])  / std::max((T)1.0e-14, Q_plus[1]);
+    T t27 = 0.5*std::max(std::fabs(uLn) + std::sqrt(p[0]*t2)*nnorm,
+                         std::fabs(uRn) + std::sqrt(p[0]*t4)*nnorm);
+    T t28 = t27*(-t2 + t4);
+    T t29 = (1.0/2.0)*p[0];
+    T t30 = -std::pow(Q_plus[1], 2)*t29 + (1.0/2.0)*p[0]*t23;
+    T t31 = t27*(Q_plus[2]*t14*t4 - t10);
+    T t32 = t27*(Q_plus[3]*t14*t4 - t11);
+    T t33 = std::pow(Q_minus[1], 2)*t29 - t18*t29;
     SimpleArray<T, 8> res;
     res[0] = 0;
-    res[1] = t30;
-    res[2] = n[0]*t32 + t33;
-    res[3] = n[1]*t32 + t34;
+    res[1] = t28;
+    res[2] = n[0]*t30 + t31;
+    res[3] = n[1]*t30 + t32;
     res[4] = 0;
-    res[5] = -t30;
-    res[6] = n[0]*t35 - t33;
-    res[7] = n[1]*t35 - t34;
+    res[5] = -t28;
+    res[6] = n[0]*t33 - t31;
+    res[7] = n[1]*t33 - t32;
     return res;
     }
 
@@ -130,14 +137,13 @@ struct Numerics {
         const T* p,
         const T* n)
     {
-    T t0 = Q[1] > p[5];
-    T t1 = n[0]*Q[2];
-    T t2 = n[1]*Q[3];
-    T t3 = std::pow(Qaux[6], 2);
-    T t4 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::max((T)0, std::pow(Q[1], 5)), 1.0/2.0);
-    T t5 = Q[1]*t1 + Q[1]*t2;
+    T t0 = n[0]*Q[2];
+    T t1 = n[1]*Q[3];
+    T t2 = std::pow(Qaux[6], 2);
+    T t3 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::max((T)0, std::pow(Q[1], 5)), 1.0/2.0);
+    T t4 = Q[1]*t0 + Q[1]*t1;
     SimpleArray<T, 1> res;
-    res[0] = std::max(std::fabs(((t0) ? (0) : (0))), std::max(std::fabs(((t0) ? (Qaux[6]*(t1 + t2)) : (0))), std::max(std::fabs(((t0) ? (t3*(t4 + t5)) : (0))), std::fabs(((t0) ? (t3*(-t4 + t5)) : (0))))));
+    res[0] = std::max(Qaux[6]*std::fabs(t0 + t1), std::max(t2*std::fabs(t3 + t4), t2*std::fabs(t3 - t4)));
     return res;
     }
 

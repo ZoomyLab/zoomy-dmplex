@@ -179,17 +179,16 @@ struct Model {
         const T* p,
         const T* n)
     {
-    T t0 = Q[1] > p[5];
-    T t1 = n[0]*Q[2];
-    T t2 = n[1]*Q[3];
-    T t3 = std::pow(Qaux[6], 2);
-    T t4 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::max((T)0, std::pow(Q[1], 5)), 1.0/2.0);
-    T t5 = Q[1]*t1 + Q[1]*t2;
+    T t0 = n[0]*Q[2];
+    T t1 = n[1]*Q[3];
+    T t2 = std::pow(Qaux[6], 2);
+    T t3 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::max((T)0, std::pow(Q[1], 5)), 1.0/2.0);
+    T t4 = Q[1]*t0 + Q[1]*t1;
     SimpleArray<T, 4> res;
-    res[0] = ((t0) ? (0) : (0));
-    res[1] = ((t0) ? (Qaux[6]*(t1 + t2)) : (0));
-    res[2] = ((t0) ? (t3*(t4 + t5)) : (0));
-    res[3] = ((t0) ? (t3*(-t4 + t5)) : (0));
+    res[0] = 0;
+    res[1] = Qaux[6]*(t0 + t1);
+    res[2] = t2*(t3 + t4);
+    res[3] = t2*(-t3 + t4);
     return res;
     }
 
@@ -482,15 +481,16 @@ struct Model {
     }
 
     PORTABLE_FN static inline SimpleArray<T, 4> project_from_3d(
-        const T* profile,
-        const T* p,
-        const T* I)
+        const T* const* column,
+        const T* p)
     {
+    T t0 = 0.015625*column[0][1];
+    T t1 = 0.03125*column[0][1];
     SimpleArray<T, 4> res;
-    res[0] = profile[0];
-    res[1] = profile[1];
-    res[2] = profile[1]*I[0];
-    res[3] = profile[1]*I[1];
+    res[0] = column[0][0];
+    res[1] = column[0][1];
+    res[2] = column[0][2]*t0 + column[1][2]*t1 + column[10][2]*t1 + column[11][2]*t1 + column[12][2]*t1 + column[13][2]*t1 + column[14][2]*t1 + column[15][2]*t1 + column[16][2]*t1 + column[17][2]*t1 + column[18][2]*t1 + column[19][2]*t1 + column[2][2]*t1 + column[20][2]*t1 + column[21][2]*t1 + column[22][2]*t1 + column[23][2]*t1 + column[24][2]*t1 + column[25][2]*t1 + column[26][2]*t1 + column[27][2]*t1 + column[28][2]*t1 + column[29][2]*t1 + column[3][2]*t1 + column[30][2]*t1 + column[31][2]*t1 + column[32][2]*t0 + column[4][2]*t1 + column[5][2]*t1 + column[6][2]*t1 + column[7][2]*t1 + column[8][2]*t1 + column[9][2]*t1;
+    res[3] = column[0][3]*t0 + column[1][3]*t1 + column[10][3]*t1 + column[11][3]*t1 + column[12][3]*t1 + column[13][3]*t1 + column[14][3]*t1 + column[15][3]*t1 + column[16][3]*t1 + column[17][3]*t1 + column[18][3]*t1 + column[19][3]*t1 + column[2][3]*t1 + column[20][3]*t1 + column[21][3]*t1 + column[22][3]*t1 + column[23][3]*t1 + column[24][3]*t1 + column[25][3]*t1 + column[26][3]*t1 + column[27][3]*t1 + column[28][3]*t1 + column[29][3]*t1 + column[3][3]*t1 + column[30][3]*t1 + column[31][3]*t1 + column[32][3]*t0 + column[4][3]*t1 + column[5][3]*t1 + column[6][3]*t1 + column[7][3]*t1 + column[8][3]*t1 + column[9][3]*t1;
     return res;
     }
 
