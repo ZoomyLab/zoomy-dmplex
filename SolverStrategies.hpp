@@ -19,8 +19,16 @@ public:
     PetscErrorCode SetupTS(TS ts, ModularSolver* solver) override {
         PetscCall(TSSetRHSFunction(ts, NULL, RHSWrapper, solver));
         PetscCall(TSSetPostStep(ts, SplittingWrapper));
-        PetscCall(TSSetType(ts, TSSSP)); 
-        PetscCall(TSSSPSetType(ts, TSSSPRK104)); 
+        // First-order space -> forward Euler (RK1), matching the jax/numpy
+        // reference: the Audusse-HR cell-mean positivity (Xing-Zhang) is a
+        // forward-Euler statement; a multi-stage SSP integrator's intermediate
+        // stages are not convex-combination-positive. Order >= 2 keeps SSP.
+        if (solver->settings.solver.reconstruction_order >= 2) {
+            PetscCall(TSSetType(ts, TSSSP));
+            PetscCall(TSSSPSetType(ts, TSSSPRK104));
+        } else {
+            PetscCall(TSSetType(ts, TSEULER));
+        }
         return PETSC_SUCCESS;
     }
 
