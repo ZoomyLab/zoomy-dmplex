@@ -22,6 +22,10 @@ struct SolverSettings {
     // for SWE/SME(0) Rusanov (only hinv used) set false to skip the per-step
     // Green-Gauss overhead.
     bool refresh_derivative_aux = true;
+    // Order-2 positivity: "zhang_shu" = eta-WB reconstruction + Zhang-Shu theta
+    // cap (provably h>=0; auto-clamps CFL<=1/6), "none" = plain MUSCL limiter.
+    std::string positivity = "none";
+    double wet_dry_eps = 1.0e-2;
     // Time integration, jax-style: pick the integrator from settings instead of
     // hard-coding it. "splitting" = explicit transport (SSP-RK) + implicit source
     // (default, like jax's explicit HyperbolicSolver); "imex" = explicit transport
@@ -109,6 +113,8 @@ struct Settings {
             s.solver.limiter = jsol.value("limiter", "venkatakrishnan");
             s.solver.time_integration = jsol.value("time_integration", "splitting");
             s.solver.refresh_derivative_aux = jsol.value("refresh_derivative_aux", true);
+            s.solver.positivity = jsol.value("positivity", "none");
+            s.solver.wet_dry_eps = jsol.value("wet_dry_eps", 1.0e-2);
         }
 
         if (j.contains("model")) {

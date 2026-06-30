@@ -62,6 +62,8 @@ private:
     NonConservativeFluxKernelPtr noncons_flux_kernel;
     SourceKernelPtr source_kernel;
     bool do_refresh_deriv_aux = true;  // gate the per-step mesh-derivative aux refresh
+    bool wb_positivity = false;        // order-2 eta-WB + Zhang-Shu positivity limiting
+    T wet_dry_eps = (T)1e-2;
 
     bool IsOwned(DM dm, PetscInt p) {
         PetscInt g_idx; 
@@ -221,6 +223,98 @@ public:
         return PETSC_SUCCESS;
     }
 
+    void SetWBPositivity(bool b, T eps) { wb_positivity = b; wet_dry_eps = eps; }
+
+    // Per-cell order-2 limiting pass (eta-WB + Zhang-Shu): transform the raw
+    // gradient G (grad of Q=[b,h,mom...]) into EFFECTIVE W-gradients in place
+    // (slot b -> phi_b*grad b; slot h -> phi_b*grad b + theta*sh; mom ->
+    // theta*phi_mom*grad mom). Owned cells only (G is global); ghosts get the
+    // limited values via the subsequent global->local scatter. SWE/SME(0)
+    // layout: b=0, h=1, momentum = the remaining rows.
+    PetscErrorCode LimitGradientsWB(Vec X_loc, Vec G_global) {
+        const int nq = Model<T>::n_dof_q, dim = Model<T>::dimension;
+        const int B = 0, H = 1;
+        PetscInt cStart, cEnd; PetscCall(DMPlexGetHeightStratum(dmQ, 0, &cStart, &cEnd));
+        if (!topology_setup) PetscCall(SetupTopology());
+        Vec cellGeom, faceGeom; PetscCall(DMPlexGetGeometryFVM(dmQ, &faceGeom, &cellGeom, NULL));
+        const PetscScalar *cG, *fG; PetscCall(VecGetArrayRead(cellGeom, &cG)); PetscCall(VecGetArrayRead(faceGeom, &fG));
+        DM dmCell; PetscCall(VecGetDM(cellGeom, &dmCell)); PetscSection secCell; PetscCall(DMGetLocalSection(dmCell, &secCell));
+        DM dmFace; PetscCall(VecGetDM(faceGeom, &dmFace)); PetscSection secFace; PetscCall(DMGetLocalSection(dmFace, &secFace));
+        const PetscScalar *x_ptr; PetscCall(VecGetArrayRead(X_loc, &x_ptr));
+        PetscScalar *g_ptr; PetscCall(VecGetArray(G_global, &g_ptr));
+
+        for (PetscInt c = cStart; c < cEnd; ++c) {
+            PetscScalar *grad_c;
+            PetscCall(DMPlexPointGlobalRef(dmGrad, c, g_ptr, &grad_c));
+            if (!grad_c) continue;                       // not owned
+            const PetscScalar *qc; PetscCall(DMPlexPointLocalRead(dmQ, c, x_ptr, &qc));
+            PetscInt co; PetscCall(PetscSectionGetOffset(secCell, c, &co));
+            const PetscFVCellGeom *cg = (const PetscFVCellGeom*)&cG[co];
+
+            // raw gradients (copy out before overwriting)
+            std::vector<T> g(nq*dim);
+            for (int k = 0; k < nq*dim; ++k) g[k] = grad_c[k];
+            std::vector<T> geta(dim);
+            for (int d = 0; d < dim; ++d) geta[d] = g[H*dim+d] + g[B*dim+d];   // grad eta = grad h + grad b
+
+            T h_bar = qc[H], b_bar = qc[B];
+            // W neighbour extrema (W = b, eta, mom...) including self
+            std::vector<T> Wc(nq), Wmin(nq), Wmax(nq);
+            for (int i = 0; i < nq; ++i) Wc[i] = (i==H) ? (b_bar+h_bar) : qc[i];
+            for (int i = 0; i < nq; ++i) { Wmin[i] = Wc[i]; Wmax[i] = Wc[i]; }
+            int is = neigh_offsets[c-cStart], ie = neigh_offsets[c-cStart+1];
+            for (int k = is; k < ie; ++k) {
+                const PetscScalar *qn; PetscCall(DMPlexPointLocalRead(dmQ, neigh_list[k], x_ptr, &qn));
+                for (int i = 0; i < nq; ++i) { T w = (i==H) ? (qn[B]+qn[H]) : qn[i];
+                    if (w < Wmin[i]) Wmin[i] = w; if (w > Wmax[i]) Wmax[i] = w; }
+            }
+            // Venkatakrishnan eps^2 = vol^(2/dim)
+            T vol = cg->volume; T eps2 = std::pow(vol, 2.0/dim);
+            // per-cell phi = min over faces of the Venkat function (per W var)
+            std::vector<T> phi(nq, 1.0);
+            const PetscInt *cone; PetscInt ncone; PetscCall(DMPlexGetConeSize(dmQ, c, &ncone)); PetscCall(DMPlexGetCone(dmQ, c, &cone));
+            auto gW = [&](int i, int d){ return (i==H) ? geta[d] : g[i*dim+d]; };
+            for (int fi = 0; fi < ncone; ++fi) {
+                PetscInt f = cone[fi]; PetscInt fo; PetscCall(PetscSectionGetOffset(secFace, f, &fo));
+                const PetscFVFaceGeom *fgeo = (const PetscFVFaceGeom*)&fG[fo];
+                T r[3]; for (int d=0; d<dim; ++d) r[d] = fgeo->centroid[d] - cg->centroid[d];
+                for (int i = 0; i < nq; ++i) {
+                    T delta = 0; for (int d=0; d<dim; ++d) delta += gW(i,d)*r[d];
+                    if (std::abs(delta) < 1e-14) continue;
+                    T dm = (delta > 0) ? (Wmax[i]-Wc[i]) : (Wmin[i]-Wc[i]);
+                    T num = dm*dm + eps2 + 2*delta*dm, den = dm*dm + 2*delta*delta + delta*dm + eps2;
+                    T pf = (den > 1e-30) ? num/den : 1.0; pf = std::max((T)0, std::min((T)1, pf));
+                    if (pf < phi[i]) phi[i] = pf;
+                }
+            }
+            if (h_bar < wet_dry_eps) for (int i=0;i<nq;++i) phi[i] = 0.0;   // dry -> O1
+            // tie b and momentum slopes to eta
+            phi[B] = std::min(phi[B], phi[H]);
+            for (int i = 0; i < nq; ++i) if (i!=B && i!=H) phi[i] = std::min(phi[i], phi[H]);
+            // Zhang-Shu theta on the conservative depth deviation sh = phi_eta*grad eta - phi_b*grad b
+            std::vector<T> sh(dim); for (int d=0; d<dim; ++d) sh[d] = phi[H]*geta[d] - phi[B]*g[B*dim+d];
+            T hmin = h_bar;
+            for (int fi = 0; fi < ncone; ++fi) {
+                PetscInt f = cone[fi]; PetscInt fo; PetscCall(PetscSectionGetOffset(secFace, f, &fo));
+                const PetscFVFaceGeom *fgeo = (const PetscFVFaceGeom*)&fG[fo];
+                T hf = h_bar; for (int d=0; d<dim; ++d) hf += sh[d]*(fgeo->centroid[d]-cg->centroid[d]);
+                if (hf < hmin) hmin = hf;
+            }
+            T theta = 1.0;
+            if (hmin < 0.0) theta = std::max((T)0, std::min((T)1, h_bar/std::max(h_bar - hmin, (T)1e-14)));
+            // write effective W-gradients back
+            for (int d = 0; d < dim; ++d) {
+                grad_c[B*dim+d] = phi[B]*g[B*dim+d];                       // grad b_eff
+                grad_c[H*dim+d] = phi[B]*g[B*dim+d] + theta*sh[d];         // grad eta_eff
+            }
+            for (int i = 0; i < nq; ++i) if (i!=B && i!=H)
+                for (int d = 0; d < dim; ++d) grad_c[i*dim+d] = theta*phi[i]*g[i*dim+d];
+        }
+        PetscCall(VecRestoreArrayRead(cellGeom, &cG)); PetscCall(VecRestoreArrayRead(faceGeom, &fG));
+        PetscCall(VecRestoreArrayRead(X_loc, &x_ptr)); PetscCall(VecRestoreArray(G_global, &g_ptr));
+        return PETSC_SUCCESS;
+    }
+
     PetscErrorCode FormRHS(PetscReal time, Vec X_global, Vec F_global) {
         PetscCall(VecZeroEntries(F_global));
         Vec X_loc, A_loc;
@@ -236,6 +330,7 @@ public:
         if (gradient) {
              PetscCall(DMCreateGlobalVector(dmGrad, &G_global));
              PetscCall(gradient->Compute(dmQ, X_global, dmGrad, G_global, boundary_map));
+             if (wb_positivity) PetscCall(LimitGradientsWB(X_loc, G_global));
              PetscCall(DMGetLocalVector(dmGrad, &G_loc));
              PetscCall(DMGlobalToLocalBegin(dmGrad, G_global, INSERT_VALUES, G_loc));
              PetscCall(DMGlobalToLocalEnd(dmGrad, G_global, INSERT_VALUES, G_loc));

@@ -29,6 +29,14 @@ public:
         } else {
             SetReconstruction(PCM);
         }
+        // Zhang-Shu a-priori positivity holds only for CFL <= 1/(2k+1) = 1/6
+        // (2D, k=1); auto-clamp so order>=2 stays provably h>=0 (matches jax).
+        if (settings.solver.reconstruction_order >= 2 &&
+            settings.solver.positivity == "zhang_shu" && settings.solver.cfl > 1.0/6.0) {
+            if (rank == 0) std::cout << "[INFO] clamping CFL " << settings.solver.cfl
+                                     << " -> 1/6 for zhang_shu positivity" << std::endl;
+            settings.solver.cfl = 1.0/6.0;
+        }
         // Limiter on unless explicitly disabled ("none"). The limiter *type*
         // (venkatakrishnan/tvd) is selected inside LinearReconstructor; only the
         // on/off toggle is wired here.

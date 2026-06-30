@@ -44,7 +44,17 @@ public:
         if (config_noncons_flux_kernel) transport->SetNonConsFlux(config_noncons_flux_kernel);
         
         if (config_reconstruction_order == 2) {
-            transport->SetReconstruction(std::make_shared<LinearReconstructor<Real>>(Model<Real>::n_dof_q, config_use_limiters));
+            bool zhang_shu = (settings.solver.positivity == "zhang_shu");
+            if (zhang_shu) {
+                // eta-WB + Zhang-Shu: the per-cell LimitGradientsWB pass writes
+                // effective W-gradients; the reconstructor does the eta->h back-
+                // transform (h_f = max(eta_f - b_f, 0)) with dry momentum zeroing.
+                transport->SetReconstruction(std::make_shared<WBPositivityReconstructor<Real>>(
+                    Model<Real>::n_dof_q, (Real)settings.solver.wet_dry_eps));
+                transport->SetWBPositivity(true, (Real)settings.solver.wet_dry_eps);
+            } else {
+                transport->SetReconstruction(std::make_shared<LinearReconstructor<Real>>(Model<Real>::n_dof_q, config_use_limiters));
+            }
             auto grad = std::make_shared<GreenGaussGradient<Real>>();
             grad->SetBCFunction([this](int idx, const Real* q, const Real* qaux, const Real* n, const Real* x, Real t, Real dx, Real* out) {
                 auto res = Model<Real>::boundary_conditions(idx, q, qaux, parameters.data(), n, x, t, dx);

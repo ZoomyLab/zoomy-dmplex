@@ -131,7 +131,7 @@ public:
 template <typename T>
 class Reconstructor {
 protected:
-    int n_comp; 
+    int n_comp;
 public:
     // Default to n_dof_q but allow override
     Reconstructor(int n = Model<T>::n_dof_q) : n_comp(n) {}
@@ -239,6 +239,49 @@ public:
 
         for(int i=0; i<this->n_comp; ++i) {
             q_face_out[i] = q_cell[i] + alpha * delta[i];
+        }
+    }
+};
+
+// Well-balanced + Zhang-Shu positivity reconstructor (order 2), matching the jax
+// EtaWellBalancedLSQMUSCL + zhang_shu recipe. It does NOT limit here — the
+// per-cell limiting pass (TransportStep::LimitGradientsWB) has already written
+// EFFECTIVE W-gradients into the gradient buffer, laid out per variable as:
+//   slot b -> grad(b_eff)   (= phi_b * grad b)
+//   slot h -> grad(eta_eff) (= phi_b*grad b + theta*sh, sh = phi_eta*grad eta - phi_b*grad b)
+//   slot k -> grad(mom_eff) (= theta*phi_mom*grad mom)
+// State layout is the SWE/SME(0) [b, h, mom...] convention: b=idx0, h=idx1.
+// Face: eta_f = (b+h) + grad(eta_eff)·dx ; b_f = b + grad(b_eff)·dx ;
+//       h_f = max(eta_f - b_f, 0) ; mom_f zeroed when h_f < eps_wet.
+template <typename T>
+class WBPositivityReconstructor : public Reconstructor<T> {
+    T eps_wet;
+    int b_idx, h_idx;
+public:
+    WBPositivityReconstructor(int n, T eps = (T)1e-2, int bidx = 0, int hidx = 1)
+        : Reconstructor<T>(n), eps_wet(eps), b_idx(bidx), h_idx(hidx) {}
+
+    void Reconstruct(const T* q_cell, const T* grad_cell, const T* cell_centroid,
+                     const T* face_centroid, const T*, const T*, T* q_face_out) override {
+        const int dim = Model<T>::dimension;
+        T dx[3];
+        for (int d = 0; d < dim; ++d) dx[d] = face_centroid[d] - cell_centroid[d];
+        if (!grad_cell) {                       // O1 cell: piecewise constant
+            for (int i = 0; i < this->n_comp; ++i) q_face_out[i] = q_cell[i];
+            return;
+        }
+        auto dot = [&](int slot) {
+            T s = (T)0; for (int d = 0; d < dim; ++d) s += grad_cell[slot*dim + d]*dx[d];
+            return s;
+        };
+        T b_bar = q_cell[b_idx], h_bar = q_cell[h_idx];
+        T b_f   = b_bar + dot(b_idx);
+        T eta_f = (b_bar + h_bar) + dot(h_idx);     // h-slot carries grad(eta_eff)
+        T h_f   = std::max(eta_f - b_f, (T)0);
+        for (int i = 0; i < this->n_comp; ++i) {
+            if (i == b_idx)      q_face_out[i] = b_f;
+            else if (i == h_idx) q_face_out[i] = h_f;
+            else q_face_out[i] = (h_f < eps_wet) ? (T)0 : (q_cell[i] + dot(i));
         }
     }
 };
