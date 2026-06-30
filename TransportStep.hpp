@@ -63,6 +63,7 @@ private:
     SourceKernelPtr source_kernel;
     bool do_refresh_deriv_aux = true;  // gate the per-step mesh-derivative aux refresh
     bool wb_positivity = false;        // order-2 eta-WB + Zhang-Shu positivity limiting
+    bool mood_skip_theta = false;      // MOOD mode: eta-WB + Venkat but NO Zhang-Shu theta
     T wet_dry_eps = (T)1e-2;
 
     bool IsOwned(DM dm, PetscInt p) {
@@ -224,6 +225,7 @@ public:
     }
 
     void SetWBPositivity(bool b, T eps) { wb_positivity = b; wet_dry_eps = eps; }
+    void SetMoodSkipTheta(bool b) { mood_skip_theta = b; }
 
     // Per-cell order-2 limiting pass (eta-WB + Zhang-Shu): transform the raw
     // gradient G (grad of Q=[b,h,mom...]) into EFFECTIVE W-gradients in place
@@ -301,7 +303,7 @@ public:
                 if (hf < hmin) hmin = hf;
             }
             T theta = 1.0;
-            if (hmin < 0.0) theta = std::max((T)0, std::min((T)1, h_bar/std::max(h_bar - hmin, (T)1e-14)));
+            if (!mood_skip_theta && hmin < 0.0) theta = std::max((T)0, std::min((T)1, h_bar/std::max(h_bar - hmin, (T)1e-14)));
             // write effective W-gradients back
             for (int d = 0; d < dim; ++d) {
                 grad_c[B*dim+d] = phi[B]*g[B*dim+d];                       // grad b_eff

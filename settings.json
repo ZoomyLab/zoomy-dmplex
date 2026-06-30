@@ -17,6 +17,6 @@
         "reconstruction_order": 2,
         "time_integration": "splitting",
         "refresh_derivative_aux": false,
-        "positivity": "zhang_shu"
+        "positivity": "mood"
     }
 }

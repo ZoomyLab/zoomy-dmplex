@@ -121,22 +121,65 @@ public:
         PetscInt step_num = 0;
         PetscCall(MonitorWrapper(ts, 0, time, X, this));
 
-        // ── Main time loop (single-pass, no detection/rollback) ──
+        // MOOD a-posteriori positivity: take the order-2 candidate at full CFL;
+        // if any cell has h<0, force those cells to first order (cell_orders=1)
+        // and re-step from the saved state. Cheaper than Zhang-Shu (no CFL=1/6).
+        const bool mood = (settings.solver.positivity == "mood");
+        Vec X_save = NULL; std::vector<uint8_t> mood_mask;
+        if (mood) {
+            PetscCall(VecDuplicate(X, &X_save));
+            PetscInt cS, cE; PetscCall(DMPlexGetHeightStratum(dmQ, 0, &cS, &cE));
+            mood_mask.assign(cE - cS, 0);
+        }
+
+        // ── Main time loop ──
         while (time < settings.solver.t_end) {
+            PetscReal t0 = time, dt0; PetscCall(TSGetTimeStep(ts, &dt0));
+            if (mood) { PetscCall(VecCopy(X, X_save)); transport->SetCellOrders({}); std::fill(mood_mask.begin(), mood_mask.end(), 0); }
+
             PetscCall(TSStep(ts));
             PetscCall(EnforcePhysicalConstraints(X));
+
+            if (mood) {
+                for (int it = 0; it < 5; ++it) {
+                    PetscInt nt = 0; PetscCall(DetectTroubled(X, mood_mask, &nt));
+                    if (nt == 0) break;
+                    transport->SetCellOrders(mood_mask);          // force troubled cells to O1
+                    PetscCall(VecCopy(X_save, X)); PetscCall(TSSetSolution(ts, X));
+                    PetscCall(TSSetTime(ts, t0)); PetscCall(TSSetTimeStep(ts, dt0));
+                    PetscCall(TSStep(ts)); PetscCall(EnforcePhysicalConstraints(X));
+                }
+            }
 
             step_num++;
             PetscCall(TSGetTime(ts, &time));
             PetscCall(PostStep(ts));
             PetscCall(MonitorWrapper(ts, step_num, time, X, this));
         }
+        if (X_save) PetscCall(VecDestroy(&X_save));
 
         if (rank == 0) std::cout << "[INFO] Finished." << std::endl;
         PetscFunctionReturn(PETSC_SUCCESS);
     }
 
 private:
+    // MOOD detector: OR troubled cells (h < -tol) into mask, return global count.
+    PetscErrorCode DetectTroubled(Vec X_global, std::vector<uint8_t>& mask, PetscInt* count) {
+        PetscFunctionBeginUser;
+        const PetscScalar *x; PetscCall(VecGetArrayRead(X_global, &x));
+        PetscInt cS, cE; PetscCall(DMPlexGetHeightStratum(dmQ, 0, &cS, &cE));
+        PetscInt nt = 0;
+        for (PetscInt c = cS; c < cE; ++c) {
+            const PetscScalar *qc; PetscCall(DMPlexPointGlobalRead(dmQ, c, x, &qc));
+            if (!qc) continue;                       // ghost / not owned
+            if (qc[1] < -1.0e-10) { mask[c - cS] = 1; nt++; }   // h = component 1
+        }
+        PetscCall(VecRestoreArrayRead(X_global, &x));
+        PetscInt gnt; MPI_Allreduce(&nt, &gnt, 1, MPIU_INT, MPI_SUM, PETSC_COMM_WORLD);
+        *count = gnt;
+        PetscFunctionReturn(PETSC_SUCCESS);
+    }
+
     PetscErrorCode EnforcePhysicalConstraints(Vec U_global) {
         PetscFunctionBeginUser;
         Vec U_loc, A_loc;

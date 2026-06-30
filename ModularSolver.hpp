@@ -45,13 +45,17 @@ public:
         
         if (config_reconstruction_order == 2) {
             bool zhang_shu = (settings.solver.positivity == "zhang_shu");
-            if (zhang_shu) {
-                // eta-WB + Zhang-Shu: the per-cell LimitGradientsWB pass writes
+            bool mood = (settings.solver.positivity == "mood");
+            if (zhang_shu || mood) {
+                // eta-WB reconstruction: the per-cell LimitGradientsWB pass writes
                 // effective W-gradients; the reconstructor does the eta->h back-
                 // transform (h_f = max(eta_f - b_f, 0)) with dry momentum zeroing.
+                // zhang_shu = a-priori theta cap (CFL<=1/6); mood = no theta (full
+                // CFL), positivity enforced a-posteriori by the solver's MOOD loop.
                 transport->SetReconstruction(std::make_shared<WBPositivityReconstructor<Real>>(
                     Model<Real>::n_dof_q, (Real)settings.solver.wet_dry_eps));
                 transport->SetWBPositivity(true, (Real)settings.solver.wet_dry_eps);
+                transport->SetMoodSkipTheta(mood);
             } else {
                 transport->SetReconstruction(std::make_shared<LinearReconstructor<Real>>(Model<Real>::n_dof_q, config_use_limiters));
             }
