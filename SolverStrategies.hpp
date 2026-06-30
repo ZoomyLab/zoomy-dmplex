@@ -24,8 +24,15 @@ public:
         // forward-Euler statement; a multi-stage SSP integrator's intermediate
         // stages are not convex-combination-positive. Order >= 2 keeps SSP.
         if (solver->settings.solver.reconstruction_order >= 2) {
+            // SSP-RK2 (2-stage Heun): 2nd-order in time matches the 2nd-order
+            // space, SSP, and is what the jax reference uses. The old 10-stage
+            // SSP-RK104 is 4th-order in time -- overkill here (10 flux evals vs 2);
+            // its only benefit is a larger SSP coefficient (~6 vs 1) for high-CFL
+            // positivity, but we run CFL 0.45 (well under Heun's limit) and MOOD
+            // handles positivity a-posteriori, so the extra stages are wasted.
             PetscCall(TSSetType(ts, TSSSP));
-            PetscCall(TSSSPSetType(ts, TSSSPRK104));
+            PetscCall(TSSSPSetType(ts, TSSSPRKS2));
+            PetscCall(TSSSPSetNumStages(ts, solver->settings.solver.ssp_stages));
         } else {
             PetscCall(TSSetType(ts, TSEULER));
         }

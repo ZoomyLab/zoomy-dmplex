@@ -1,22 +1,26 @@
 {
-    "name": "SME0_malpasset",
-    "io": {
-        "directory": "outputs/dmplex",
-        "filename": "dmplex",
-        "snapshots": 40,
-        "snapshot_logic": "interpolate",
-        "clean_directory": true,
-        "mesh_path": "./../../data/malpasset/geo_malpasset-small.msh",
-        "initial_condition_file": "./ic_malpasset.h5",
-        "initial_condition_mask": [0, 1],
-        "write_3d": false
-    },
-    "solver": {
-        "t_end": 400.0,
-        "cfl": 0.45,
-        "reconstruction_order": 2,
-        "time_integration": "splitting",
-        "refresh_derivative_aux": false,
-        "positivity": "mood"
-    }
+  "name": "SME0_malpasset",
+  "io": {
+    "directory": "outputs/dmplex",
+    "filename": "dmplex",
+    "snapshots": 40,
+    "snapshot_logic": "interpolate",
+    "clean_directory": true,
+    "mesh_path": "./../../data/malpasset/geo_malpasset-small.msh",
+    "initial_condition_file": "./ic_malpasset.h5",
+    "initial_condition_mask": [
+      0,
+      1
+    ],
+    "write_3d": false
+  },
+  "solver": {
+    "t_end": 400.0,
+    "cfl": 0.45,
+    "reconstruction_order": 2,
+    "time_integration": "splitting",
+    "refresh_derivative_aux": false,
+    "positivity": "mood",
+    "ssp_stages": 5
+  }
 }
