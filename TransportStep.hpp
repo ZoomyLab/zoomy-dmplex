@@ -57,6 +57,10 @@ private:
     bool topology_setup = false;
 
     std::vector<uint8_t> cell_orders;
+    // Local-MOOD face filter: when set, ComputeFluxes processes ONLY faces
+    // adjacent to a troubled cell (mask[c-cStart]==1) and accumulates into F for
+    // those cells. Used to compute a cheap, local O1 override of troubled cells.
+    const std::vector<uint8_t>* troubled_filter = nullptr;
 
     FluxKernelPtr cons_flux_kernel;
     NonConservativeFluxKernelPtr noncons_flux_kernel;
@@ -351,6 +355,30 @@ public:
         return PETSC_SUCCESS;
     }
 
+    // Local MOOD: O1 (PCM, no gradients) RHS over X_global, restricted to faces
+    // adjacent to troubled cells. F_global[c] is the first-order forward-Euler
+    // dQ/dt for each troubled cell c (only troubled cells are meaningful). Cheap:
+    // only troubled-adjacent faces are visited.
+    PetscErrorCode FormRHSTroubledO1(PetscReal time, Vec X_global, Vec F_global, const std::vector<uint8_t>& mask) {
+        PetscCall(VecZeroEntries(F_global));
+        Vec X_loc, A_loc, F_loc;
+        PetscCall(DMGetLocalVector(dmQ, &X_loc));
+        PetscCall(DMGlobalToLocalBegin(dmQ, X_global, INSERT_VALUES, X_loc));
+        PetscCall(DMGlobalToLocalEnd(dmQ, X_global, INSERT_VALUES, X_loc));
+        PetscCall(DMGetLocalVector(dmAux, &A_loc));
+        PetscCall(UpdateState(X_loc, A_loc));
+        PetscCall(DMGetLocalVector(dmQ, &F_loc)); PetscCall(VecZeroEntries(F_loc));
+        troubled_filter = &mask;
+        PetscCall(ComputeFluxes(time, X_loc, A_loc, NULL /*PCM -> first order*/, F_loc));
+        troubled_filter = nullptr;
+        PetscCall(DMLocalToGlobalBegin(dmQ, F_loc, ADD_VALUES, F_global));
+        PetscCall(DMLocalToGlobalEnd(dmQ, F_loc, ADD_VALUES, F_global));
+        PetscCall(DMRestoreLocalVector(dmQ, &X_loc));
+        PetscCall(DMRestoreLocalVector(dmAux, &A_loc));
+        PetscCall(DMRestoreLocalVector(dmQ, &F_loc));
+        return PETSC_SUCCESS;
+    }
+
     PetscErrorCode ComputeFluxes(PetscReal time, Vec X_loc, Vec A_loc, const PetscScalar* g_ptr, Vec F_loc) {
         const PetscScalar *x_ptr, *a_ptr; PetscScalar *f_ptr;
         PetscCall(VecGetArrayRead(X_loc, &x_ptr)); PetscCall(VecGetArrayRead(A_loc, &a_ptr)); PetscCall(VecGetArray(F_loc, &f_ptr));
@@ -379,6 +407,14 @@ public:
             for(int d=0; d<dim; ++d) n_hat[d] = fg->normal[d] / area;
 
             const PetscInt *cells; PetscInt num_cells; PetscCall(DMPlexGetSupportSize(dmQ, f, &num_cells)); PetscCall(DMPlexGetSupport(dmQ, f, &cells));
+
+            // Local-MOOD: skip faces not touching any troubled cell.
+            if (troubled_filter) {
+                bool touch = false;
+                for (PetscInt s = 0; s < num_cells; ++s)
+                    if (cells[s] >= cStart && cells[s] < cEnd && (*troubled_filter)[cells[s] - cStart] == 1) { touch = true; break; }
+                if (!touch) continue;
+            }
 
             if (num_cells == 2) {
                 const PetscScalar *qL_cell, *qR_cell; const PetscScalar *aL_cell, *aR_cell;

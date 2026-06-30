@@ -12,7 +12,7 @@
         "write_3d": false
     },
     "solver": {
-        "t_end": 20.0,
+        "t_end": 400.0,
         "cfl": 0.45,
         "reconstruction_order": 2,
         "time_integration": "splitting",

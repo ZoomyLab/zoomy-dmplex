@@ -121,13 +121,17 @@ public:
         PetscInt step_num = 0;
         PetscCall(MonitorWrapper(ts, 0, time, X, this));
 
-        // MOOD a-posteriori positivity: take the order-2 candidate at full CFL;
-        // if any cell has h<0, force those cells to first order (cell_orders=1)
-        // and re-step from the saved state. Cheaper than Zhang-Shu (no CFL=1/6).
+        // LOCAL MOOD a-posteriori positivity (CPU-appropriate; jax does this
+        // globally because it is vectorized). Take the stable SSP-RK104 order-2
+        // candidate at full CFL; the healthy domain keeps 2nd-order time. Any
+        // cell with h<0 is OVERRIDDEN by a local first-order forward-Euler update
+        // computed from the saved old state (PCM, only troubled-adjacent faces) —
+        // 1st order ONLY for the troubled wet/dry cells, the rest stays 2nd order.
         const bool mood = (settings.solver.positivity == "mood");
-        Vec X_save = NULL; std::vector<uint8_t> mood_mask;
+        Vec X_save = NULL, F_mood = NULL; std::vector<uint8_t> mood_mask;
         if (mood) {
             PetscCall(VecDuplicate(X, &X_save));
+            PetscCall(VecDuplicate(X, &F_mood));
             PetscInt cS, cE; PetscCall(DMPlexGetHeightStratum(dmQ, 0, &cS, &cE));
             mood_mask.assign(cE - cS, 0);
         }
@@ -135,19 +139,26 @@ public:
         // ── Main time loop ──
         while (time < settings.solver.t_end) {
             PetscReal t0 = time, dt0; PetscCall(TSGetTimeStep(ts, &dt0));
-            if (mood) { PetscCall(VecCopy(X, X_save)); transport->SetCellOrders({}); std::fill(mood_mask.begin(), mood_mask.end(), 0); }
+            if (mood) { PetscCall(VecCopy(X, X_save)); std::fill(mood_mask.begin(), mood_mask.end(), 0); }
 
             PetscCall(TSStep(ts));
             PetscCall(EnforcePhysicalConstraints(X));
 
             if (mood) {
-                for (int it = 0; it < 5; ++it) {
-                    PetscInt nt = 0; PetscCall(DetectTroubled(X, mood_mask, &nt));
-                    if (nt == 0) break;
-                    transport->SetCellOrders(mood_mask);          // force troubled cells to O1
-                    PetscCall(VecCopy(X_save, X)); PetscCall(TSSetSolution(ts, X));
-                    PetscCall(TSSetTime(ts, t0)); PetscCall(TSSetTimeStep(ts, dt0));
-                    PetscCall(TSStep(ts)); PetscCall(EnforcePhysicalConstraints(X));
+                // SINGLE pass: the local override only modifies troubled cells
+                // (making them O1-positive) and never touches healthy neighbours,
+                // so it cannot create a new troubled cell -> one step is enough.
+                PetscInt nt = 0; PetscCall(DetectTroubled(X, mood_mask, &nt));
+                if (nt > 0) {
+                    if (rank == 0) std::cout << "[MOOD] step " << step_num << " troubled=" << nt << std::endl;
+                    PetscCall(transport->FormRHSTroubledO1(t0, X_save, F_mood, mood_mask));
+                    PetscCall(ApplyTroubledO1(X, X_save, F_mood, dt0, mood_mask));
+                    PetscCall(EnforcePhysicalConstraints(X));
+                    // diagnostic: confirm the override actually cured h<0
+                    std::vector<uint8_t> chk(mood_mask.size(), 0); PetscInt nt2 = 0;
+                    PetscCall(DetectTroubled(X, chk, &nt2));
+                    if (nt2 > 0 && rank == 0)
+                        std::cout << "[MOOD] step " << step_num << " STILL troubled=" << nt2 << " after override" << std::endl;
                 }
             }
 
@@ -157,6 +168,7 @@ public:
             PetscCall(MonitorWrapper(ts, step_num, time, X, this));
         }
         if (X_save) PetscCall(VecDestroy(&X_save));
+        if (F_mood) PetscCall(VecDestroy(&F_mood));
 
         if (rank == 0) std::cout << "[INFO] Finished." << std::endl;
         PetscFunctionReturn(PETSC_SUCCESS);
@@ -177,6 +189,26 @@ private:
         PetscCall(VecRestoreArrayRead(X_global, &x));
         PetscInt gnt; MPI_Allreduce(&nt, &gnt, 1, MPIU_INT, MPI_SUM, PETSC_COMM_WORLD);
         *count = gnt;
+        PetscFunctionReturn(PETSC_SUCCESS);
+    }
+
+    // Overwrite troubled cells with their local first-order forward-Euler update
+    // X[c] = X_save[c] + dt * F_O1[c]. Untroubled cells keep the order-2 candidate.
+    PetscErrorCode ApplyTroubledO1(Vec X, Vec X_save, Vec F, PetscReal dt, const std::vector<uint8_t>& mask) {
+        PetscFunctionBeginUser;
+        const PetscScalar *xs, *fp; PetscScalar *xx;
+        PetscCall(VecGetArrayRead(X_save, &xs)); PetscCall(VecGetArrayRead(F, &fp)); PetscCall(VecGetArray(X, &xx));
+        PetscInt cS, cE; PetscCall(DMPlexGetHeightStratum(dmQ, 0, &cS, &cE));
+        for (PetscInt c = cS; c < cE; ++c) {
+            if (mask[c - cS] != 1) continue;
+            const PetscScalar *qs, *qf; PetscScalar *qx;
+            PetscCall(DMPlexPointGlobalRead(dmQ, c, xs, &qs));
+            PetscCall(DMPlexPointGlobalRead(dmQ, c, fp, &qf));
+            PetscCall(DMPlexPointGlobalRef(dmQ, c, xx, &qx));
+            if (!qs || !qf || !qx) continue;
+            for (int i = 0; i < Model<Real>::n_dof_q; ++i) qx[i] = qs[i] + dt * qf[i];
+        }
+        PetscCall(VecRestoreArrayRead(X_save, &xs)); PetscCall(VecRestoreArrayRead(F, &fp)); PetscCall(VecRestoreArray(X, &xx));
         PetscFunctionReturn(PETSC_SUCCESS);
     }
 
