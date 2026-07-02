@@ -10,6 +10,7 @@
 #include <vector>
 #include <iostream>
 #include <memory>
+#include <type_traits>
 
 #include "UserFunctions.H"   // must precede Model.H (pulled in via Numerics.H)
 #include "Numerics.H"
@@ -23,7 +24,18 @@ using Real = PetscReal;
 // --- GLOBAL DEFINITIONS ---
 
 enum GradientMethod { GREEN_GAUSS, LEAST_SQUARES };
-enum ReconstructionType { PCM, LINEAR }; 
+enum ReconstructionType { PCM, LINEAR };
+
+// Detect whether the generated Model.H emits initial_condition(const T*, const T*).
+// The printer emits it ONLY when the model has initial_conditions (e.g. the shared
+// SWE/dam-break GUI case); MalpassetSME is file-IC-based and does NOT emit it, so
+// the shared header must compile both ways (REQ-96).
+template <typename T, typename = void>
+struct HasInitialCondition : std::false_type {};
+template <typename T>
+struct HasInitialCondition<T, std::void_t<decltype(
+    Model<T>::initial_condition(std::declval<const T*>(), std::declval<const T*>()))>>
+    : std::true_type {};
 
 using FluxKernelPtr = SimpleArray<PetscScalar, Model<Real>::n_dof_q> (*)(
     const PetscScalar*, const PetscScalar*, const PetscScalar*, const PetscScalar*, 
@@ -212,22 +224,57 @@ protected:
         return PETSC_SUCCESS;
     }
 
-    // Initial conditions come from a file now: the SystemModel-path Model.H no
-    // longer emits initial_condition()/initial_aux_condition(). Q is loaded from
-    // settings.io.initial_condition_file (written by generate_ic.py); the aux
-    // state is derived from Q via update_aux_variables (the solver refreshes it
-    // before the first time step — see MUSCLSolver::Run).
+    // Initial conditions: if io.initial_condition_file is set, load Q from it
+    // (e.g. Malpasset's real bathymetry+reservoir, written by generate_ic.py).
+    // Otherwise project the model-emitted Model::initial_condition(x, p) onto cell
+    // centroids — matching numpy/jax and the shared folder case (REQ-96). The aux
+    // state is derived from Q via update_aux_variables before the first step.
     virtual PetscErrorCode SetupInitialConditions() {
         PetscFunctionBeginUser;
-        if (settings.io.initial_condition_file.empty()) {
-            SETERRQ(PETSC_COMM_WORLD, PETSC_ERR_SUP,
-                "No io.initial_condition_file set: the model no longer provides "
-                "initial_condition(); generate one with generate_ic.py.");
+        if (!settings.io.initial_condition_file.empty()) {
+            std::vector<PetscInt> fields(settings.io.initial_condition_mask.begin(),
+                                         settings.io.initial_condition_mask.end());
+            PetscCall(io->LoadSolution(X, dmQ, settings.io.initial_condition_file, fields));
+            PetscCall(TSSetSolution(ts, X));
+            PetscFunctionReturn(PETSC_SUCCESS);
         }
-        std::vector<PetscInt> fields(settings.io.initial_condition_mask.begin(),
-                                     settings.io.initial_condition_mask.end());
-        PetscCall(io->LoadSolution(X, dmQ, settings.io.initial_condition_file, fields));
-        PetscCall(TSSetSolution(ts, X));
+        if constexpr (HasInitialCondition<Real>::value) {
+            PetscCall(ProjectModelInitialCondition());
+            PetscCall(TSSetSolution(ts, X));
+            PetscFunctionReturn(PETSC_SUCCESS);
+        } else {
+            SETERRQ(PETSC_COMM_WORLD, PETSC_ERR_SUP,
+                "No io.initial_condition_file set and the model emits no "
+                "initial_condition(x,p): set an IC file or build a model with "
+                "initial_conditions.");
+        }
+    }
+
+    // Evaluate Model::initial_condition(centroid, p) per owned cell into X.
+    // Guarded by HasInitialCondition via `if constexpr`, so it is only
+    // instantiated when the generated Model.H actually emits initial_condition.
+    template <typename R = Real>
+    PetscErrorCode ProjectModelInitialCondition() {
+        PetscFunctionBeginUser;
+        if constexpr (HasInitialCondition<R>::value) {
+            Vec cellGeom, faceGeom;
+            PetscCall(DMPlexGetGeometryFVM(dmQ, &faceGeom, &cellGeom, NULL));
+            const PetscScalar *cG; PetscCall(VecGetArrayRead(cellGeom, &cG));
+            DM dmCell; PetscCall(VecGetDM(cellGeom, &dmCell));
+            PetscSection secCell; PetscCall(DMGetLocalSection(dmCell, &secCell));
+            PetscScalar *xarr; PetscCall(VecGetArray(X, &xarr));
+            PetscInt cS, cE; PetscCall(DMPlexGetHeightStratum(dmQ, 0, &cS, &cE));
+            for (PetscInt c = cS; c < cE; ++c) {
+                PetscScalar *qx; PetscCall(DMPlexPointGlobalRef(dmQ, c, xarr, &qx));
+                if (!qx) continue;                                  // ghost / not owned
+                PetscInt off; PetscCall(PetscSectionGetOffset(secCell, c, &off));
+                const PetscFVCellGeom *cg = (const PetscFVCellGeom*)&cG[off];
+                auto ic = Model<R>::initial_condition(cg->centroid, parameters.data());
+                for (int i = 0; i < Model<R>::n_dof_q; ++i) qx[i] = ic[i];
+            }
+            PetscCall(VecRestoreArray(X, &xarr));
+            PetscCall(VecRestoreArrayRead(cellGeom, &cG));
+        }
         PetscFunctionReturn(PETSC_SUCCESS);
     }
     // Aux is recomputed from Q via update_aux_variables; nothing to project here.

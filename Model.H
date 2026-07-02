@@ -179,16 +179,17 @@ struct Model {
         const T* p,
         const T* n)
     {
-    T t0 = n[0]*Q[2];
-    T t1 = n[1]*Q[3];
-    T t2 = std::pow(Qaux[6], 2);
-    T t3 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::max((T)0, std::pow(Q[1], 5)), 1.0/2.0);
-    T t4 = Q[1]*t0 + Q[1]*t1;
+    T t0 = std::max((T)1.0e-14, Q[1]);
+    T t1 = n[0]*Q[2];
+    T t2 = n[1]*Q[3];
+    T t3 = (1.0 / std::pow(t0, 2));
+    T t4 = std::pow(p[0], 1.0/2.0)*std::pow(std::pow(n[0], 2) + std::pow(n[1], 2), 1.0/2.0)*std::pow(std::max((T)0, std::pow(Q[1], 5)), 1.0/2.0);
+    T t5 = Q[1]*t1 + Q[1]*t2;
     SimpleArray<T, 4> res;
     res[0] = 0;
-    res[1] = Qaux[6]*(t0 + t1);
-    res[2] = t2*(t3 + t4);
-    res[3] = t2*(-t3 + t4);
+    res[1] = (t1 + t2)/t0;
+    res[2] = t3*(t4 + t5);
+    res[3] = t3*(-t4 + t5);
     return res;
     }
 
@@ -425,13 +426,32 @@ struct Model {
     compute_derivative(Qaux[5], Q[0], 0, 1, 0, mesh);
     }
 
-    // initial_condition: NOT emitted from the SystemModel (provide solver-side).
-    //   the SystemModel carries no symbolic initial state; IC is
-    //   case-side (case directory / settings.json).
+    PORTABLE_FN static inline SimpleArray<T, 4> initial_condition(
+        const T* X,
+        const T* p)
+    {
+    SimpleArray<T, 4> res;
+    res[0] = 1.0;
+    res[1] = 0.0;
+    res[2] = 0.0;
+    res[3] = 0.0;
+    return res;
+    }
 
-    // initial_aux_condition: NOT emitted from the SystemModel (provide solver-side).
-    //   the SystemModel carries no symbolic initial state; IC is
-    //   case-side (case directory / settings.json).
+    PORTABLE_FN static inline SimpleArray<T, 7> initial_aux_condition(
+        const T* X,
+        const T* p)
+    {
+    SimpleArray<T, 7> res;
+    res[0] = 1.0;
+    res[1] = 0.0;
+    res[2] = 0.0;
+    res[3] = 0.0;
+    res[4] = 0.0;
+    res[5] = 0.0;
+    res[6] = 0.0;
+    return res;
+    }
 
     PORTABLE_FN static inline SimpleArray<T, 4> reconstruction_variables(
         const T* Q,
@@ -484,13 +504,28 @@ struct Model {
         const T* const* column,
         const T* p)
     {
-    T t0 = 0.015625*column[0][1];
-    T t1 = 0.03125*column[0][1];
+    T t0 = 0.01554951690821256*column[0][1];
+    T t1 = 0.031126482213438732*column[0][1];
+    T t2 = 0.031293828892005611*column[0][1];
+    T t3 = 0.031303568645784631*column[0][1];
+    T t4 = 0.0313115375352402*column[0][1];
+    T t5 = 0.031317735560372303*column[0][1];
+    T t6 = 0.031322162721180949*column[0][1];
+    T t7 = 0.031324819017666143*column[0][1];
+    T t8 = 0.031325704449827872*column[0][1];
+    T t9 = 0.031152159746128887*column[0][1];
+    T t10 = 0.031282318273903126*column[0][1];
+    T t11 = 0.031269036791477182*column[0][1];
+    T t12 = 0.031253984444727781*column[0][1];
+    T t13 = 0.031237161233654921*column[0][1];
+    T t14 = 0.0312185671582586*column[0][1];
+    T t15 = 0.031198202218538824*column[0][1];
+    T t16 = 0.031176066414495586*column[0][1];
     SimpleArray<T, 4> res;
     res[0] = column[0][0];
     res[1] = column[0][1];
-    res[2] = column[0][2]*t0 + column[1][2]*t1 + column[10][2]*t1 + column[11][2]*t1 + column[12][2]*t1 + column[13][2]*t1 + column[14][2]*t1 + column[15][2]*t1 + column[16][2]*t1 + column[17][2]*t1 + column[18][2]*t1 + column[19][2]*t1 + column[2][2]*t1 + column[20][2]*t1 + column[21][2]*t1 + column[22][2]*t1 + column[23][2]*t1 + column[24][2]*t1 + column[25][2]*t1 + column[26][2]*t1 + column[27][2]*t1 + column[28][2]*t1 + column[29][2]*t1 + column[3][2]*t1 + column[30][2]*t1 + column[31][2]*t1 + column[32][2]*t0 + column[4][2]*t1 + column[5][2]*t1 + column[6][2]*t1 + column[7][2]*t1 + column[8][2]*t1 + column[9][2]*t1;
-    res[3] = column[0][3]*t0 + column[1][3]*t1 + column[10][3]*t1 + column[11][3]*t1 + column[12][3]*t1 + column[13][3]*t1 + column[14][3]*t1 + column[15][3]*t1 + column[16][3]*t1 + column[17][3]*t1 + column[18][3]*t1 + column[19][3]*t1 + column[2][3]*t1 + column[20][3]*t1 + column[21][3]*t1 + column[22][3]*t1 + column[23][3]*t1 + column[24][3]*t1 + column[25][3]*t1 + column[26][3]*t1 + column[27][3]*t1 + column[28][3]*t1 + column[29][3]*t1 + column[3][3]*t1 + column[30][3]*t1 + column[31][3]*t1 + column[32][3]*t0 + column[4][3]*t1 + column[5][3]*t1 + column[6][3]*t1 + column[7][3]*t1 + column[8][3]*t1 + column[9][3]*t1;
+    res[2] = column[0][2]*t0 + column[1][2]*t1 + column[10][2]*t2 + column[11][2]*t3 + column[12][2]*t4 + column[13][2]*t5 + column[14][2]*t6 + column[15][2]*t7 + column[16][2]*t8 + column[17][2]*t7 + column[18][2]*t6 + column[19][2]*t5 + column[2][2]*t9 + column[20][2]*t4 + column[21][2]*t3 + column[22][2]*t2 + column[23][2]*t10 + column[24][2]*t11 + column[25][2]*t12 + column[26][2]*t13 + column[27][2]*t14 + column[28][2]*t15 + column[29][2]*t16 + column[3][2]*t16 + column[30][2]*t9 + column[31][2]*t1 + column[32][2]*t0 + column[4][2]*t15 + column[5][2]*t14 + column[6][2]*t13 + column[7][2]*t12 + column[8][2]*t11 + column[9][2]*t10;
+    res[3] = column[0][3]*t0 + column[1][3]*t1 + column[10][3]*t2 + column[11][3]*t3 + column[12][3]*t4 + column[13][3]*t5 + column[14][3]*t6 + column[15][3]*t7 + column[16][3]*t8 + column[17][3]*t7 + column[18][3]*t6 + column[19][3]*t5 + column[2][3]*t9 + column[20][3]*t4 + column[21][3]*t3 + column[22][3]*t2 + column[23][3]*t10 + column[24][3]*t11 + column[25][3]*t12 + column[26][3]*t13 + column[27][3]*t14 + column[28][3]*t15 + column[29][3]*t16 + column[3][3]*t16 + column[30][3]*t9 + column[31][3]*t1 + column[32][3]*t0 + column[4][3]*t15 + column[5][3]*t14 + column[6][3]*t13 + column[7][3]*t12 + column[8][3]*t11 + column[9][3]*t10;
     return res;
     }
 
