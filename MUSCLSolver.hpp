@@ -162,6 +162,17 @@ public:
                 }
             }
 
+            // Operator-split SOURCE step. The SplittingStrategy registers its
+            // source solve via TSSetPostStep(SplittingWrapper), but PETSc only
+            // invokes that from TSSolve — this manual TSStep loop never does, so
+            // the source (friction, moment excitation, bed slope) was silently
+            // dropped. Apply it here after transport (+MOOD positivity). IMEX /
+            // FullyImplicit carry the source in their IFunction, so skip those.
+            if (settings.solver.time_integration == "splitting" && source_solver) {
+                PetscCall(source_solver->Solve(dt0, X, A));
+                PetscCall(EnforcePhysicalConstraints(X));
+            }
+
             step_num++;
             PetscCall(TSGetTime(ts, &time));
             PetscCall(PostStep(ts));
