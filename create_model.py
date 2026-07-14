@@ -96,6 +96,10 @@ def build_system_model(dimension=3):
     m = MalpassetSME(level=0, dimension=dimension, clamp=True, desingularize=True,
                      boundary_conditions=BoundaryConditions(
                          [FromModel(tag="default", definition="wall")]))
+    # NOTE (REQ-143/REQ-131): this is MalpassetSME's OWN wrapper property
+    # (a composition class, not a core Model) — internally it already builds
+    # via ``SystemModel.from_model(self._sme)``.  Core's removed
+    # ``Model.system_model`` is not involved here.
     return m.system_model
 
 
