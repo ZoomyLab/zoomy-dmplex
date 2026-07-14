@@ -185,7 +185,7 @@ public:
         PetscFunctionReturn(PETSC_SUCCESS);
     }
 
-private:
+protected:   // (was private) — ChorinVAMSolver reuses EnforcePhysicalConstraints etc.
     // MOOD detector: OR troubled cells (h < -tol) into mask, return global count.
     PetscErrorCode DetectTroubled(Vec X_global, std::vector<uint8_t>& mask, PetscInt* count) {
         PetscFunctionBeginUser;

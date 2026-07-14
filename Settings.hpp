@@ -32,6 +32,7 @@ struct SolverSettings {
     // + implicit source via TSARKIMEX (like jax's IMEXSourceSolverJax, for stiff
     // sources); "implicit" = fully implicit BDF2.
     std::string time_integration = "splitting";  // "splitting" | "imex" | "implicit"
+    std::string method = "muscl";                 // "muscl" (FV) | "chorin" (VAM pressure-split)
     // Order-2 explicit integrator = s-stage SSP-RK2 (2nd order, SSP coeff s-1).
     // 2 = Heun (cheapest, weakest positivity margin); 5 = SSP coeff 4 (default,
     // roundoff positivity with MOOD at ~half the cost of 4th-order SSP-RK104).
@@ -116,6 +117,7 @@ struct Settings {
             s.solver.min_dt = jsol.value("min_dt", 1.0e-12);
             s.solver.limiter = jsol.value("limiter", "venkatakrishnan");
             s.solver.time_integration = jsol.value("time_integration", "splitting");
+            s.solver.method = jsol.value("method", "muscl");
             s.solver.refresh_derivative_aux = jsol.value("refresh_derivative_aux", true);
             s.solver.positivity = jsol.value("positivity", "none");
             s.solver.wet_dry_eps = jsol.value("wet_dry_eps", 1.0e-2);

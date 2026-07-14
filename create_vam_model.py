@@ -37,7 +37,7 @@ def resolve_subs(sm):
 def build_split(level=1, dimension=3):
     m = VAM(level=level, dimension=dimension, closures=[Newtonian(), StressFree()])
     dt = sp.Symbol("dt", positive=True)
-    return m.chorin_split(dt, system_model=m.system_model)
+    return m.chorin_split(dt)
 
 
 def emit_predictor(split, out=HERE, order=0):
@@ -86,9 +86,16 @@ def emit_chorin_ops(split, out=HERE):
     for e in press + corr: syms |= e.free_symbols
     derivs = sorted(nm for nm in (str(s) for s in syms)
                     if nm not in STATE and nm not in PARAM and nm != "dt" and parse(nm))
-    smap = {sp.Symbol(s): sp.Symbol(f"Q[{i}]") for i, s in enumerate(STATE)}
-    smap.update({sp.Symbol(p): sp.Symbol(f"p[{i}]") for i, p in enumerate(PARAM)})
-    smap.update({sp.Symbol(nm): sp.Symbol(f"Qaux[{j}]") for j, nm in enumerate(derivs)})
+    didx = {nm: j for j, nm in enumerate(derivs)}
+    # key on the ACTUAL symbol objects (assumptions differ from sp.Symbol(name);
+    # xreplace must match the exact objects, else the raw names leak into the C).
+    smap = {}
+    for s in syms:
+        nm = str(s)
+        if nm in STATE:   smap[s] = sp.Symbol(f"Q[{STATE.index(nm)}]")
+        elif nm in PARAM: smap[s] = sp.Symbol(f"p[{PARAM.index(nm)}]")
+        elif nm == "dt":  smap[s] = sp.Symbol("dt")
+        elif nm in didx:  smap[s] = sp.Symbol(f"Qaux[{didx[nm]}]")
     def body(rows):
         return "\n".join(f"    out[{i}] = {ccode(r.xreplace(smap))};" for i, r in enumerate(rows))
     layout = "\n".join(f"//   Qaux[{j}] = {nm}  ({parse(nm)[0]} d/{''.join(parse(nm)[1])})"
