@@ -170,8 +170,25 @@ def emit_chorin_ops(split, out=HERE):
                 rest = nm[len(fld)+1:].split("_")
                 if all(t in ("x","y","z") for t in rest): return (fld, tuple(rest))
         return None
+    # ── the ANALYTIC pressure blocks (REQ-172) ───────────────────────────
+    # SM_press.source is AFFINE in P and its derivatives:
+    #   source_k = sum_l [ A0_kl*P_l + Ax_kl*dP_l/dx + Axx_kl*d2P_l/dxx + ... ] + RHS_k
+    # pressure_operator() hands those blocks back symbolically, so the solver can
+    # ASSEMBLE a real sparse Pmat instead of only doing matrix-free matvecs --
+    # the prerequisite for any preconditioner. Blocks live in the SAME symbol
+    # universe as the residual (frozen predictor state + params + dt), so they
+    # reuse the smap/derivative-aux machinery below unchanged.
+    pop = ps.pressure_operator()
+    pblocks = {}                       # cname -> (NP x NP matrix of exprs)
+    pblocks["A0"] = pop.A0
+    for ax, M in sorted(pop.first_derivative.items()):
+        pblocks["A" + "xyz"[ax]] = M
+    for (a, b), M in sorted(pop.second_derivative.items()):
+        pblocks["A" + "xyz"[a] + "xyz"[b]] = M
+    pblock_exprs = [scal(e) for M in pblocks.values() for row in M for e in row]
+
     syms = set()
-    for e in press + corr: syms |= e.free_symbols
+    for e in press + corr + pblock_exprs: syms |= e.free_symbols
     derivs = sorted(nm for nm in (str(s) for s in syms)
                     if nm not in STATE and nm not in PARAM and nm != "dt" and parse(nm))
     didx = {nm: j for j, nm in enumerate(derivs)}
@@ -208,6 +225,24 @@ def emit_chorin_ops(split, out=HERE):
     spec_rows = "\n".join(
         f"    {{{f}, {a1}, {a2}, {isP}}},   // CA[{j}] = {nm}"
         for j, (f, a1, a2, isP, nm) in enumerate(specs))
+
+    # pressure-block tables: which derivative each block multiplies, + the body
+    NPn = len(P_idx)
+    prow, pbody = [], []
+    for blk, (cname, M) in enumerate(pblocks.items()):
+        # "A0" = the undifferentiated block; "Ax"/"Axx"/"Axy" carry axis letters
+        ax = "" if cname == "A0" else cname[1:]
+        a1 = AX[ax[0]] if len(ax) >= 1 else -1
+        a2 = AX[ax[1]] if len(ax) >= 2 else -1
+        prow.append(f"    {{{a1}, {a2}}},   // block {blk} = {cname}"
+                    + ("  (undifferentiated: multiplies P itself)" if a1 < 0 else ""))
+        for k in range(NPn):
+            for l in range(NPn):
+                e = scal(M[k][l])
+                pbody.append(f"    out[{(blk*NPn + k)*NPn + l}] = "
+                             f"{ccode(e.xreplace(smap))};   // {cname}[{k}][{l}]")
+    pblock_rows = "\n".join(prow)
+    pblock_body = "\n".join(pbody)
     hdr = f"""#pragma once
 #include "Numerics.H"
 // VAM Chorin pressure + corrector ops (generated). State: {STATE}.
@@ -240,6 +275,36 @@ struct VamAuxSpec {{ int field; int ax1; int ax2; bool is_P; }};
 static constexpr VamAuxSpec VAM_CA[VAM_NCA] = {{
 {spec_rows}
 }};
+
+// ── analytic pressure blocks (REQ-172) ───────────────────────────────────
+// source_k = sum_l [ A0_kl*P_l + Ad_kl*(d^|a| P_l / da) ... ] + RHS_k, i.e. the
+// SAME operator vam_pressure_residual applies matrix-free -- but exposed
+// block-by-block so the solver can ASSEMBLE a sparse Pmat for a preconditioner.
+// Each fills an NP*NP row-major block for ONE cell from that cell's frozen
+// state. VAM_PBLOCKS lists which derivative each block multiplies; the solver
+// combines them with its own Green-Gauss stencil weights.
+//
+// ⚠ THE PMAT MUST BE BLOCK-AWARE (blocksize = VAM_NP). @amrex's Local Fourier
+// Analysis (REQ-172) measured rho(D^-1 M) = 3.9 modal / 1.8 nodal, BOTH > 1:
+// this block is coupling-dominated, not diagonally dominated, so any point /
+// per-mode preconditioner is GUARANTEED to diverge -- they measured point-Jacobi
+// and per-mode multigrid both diverging, and only point-BLOCK-Jacobi (invert the
+// full NP*NP mode block per cell) converging. So a SCALAR PCGAMG on this matrix
+// reproduces their diverging per-mode MG. MatSetBlockSize(Pmat, VAM_NP) makes
+// GAMG aggregate mode-blocks and smooth block-wise = their point-block-Jacobi as
+// the MG smoother, which is the one combination that both converges and can be
+// mesh-independent.
+struct VamPBlockSpec {{ int ax1; int ax2; }};   // ax=-1 => the undifferentiated A0 term
+static constexpr int VAM_N_PBLOCK = {len(pblocks)};
+static constexpr VamPBlockSpec VAM_PBLOCKS[VAM_N_PBLOCK] = {{
+{pblock_rows}
+}};
+
+template <typename T>
+PORTABLE_FN inline void vam_pressure_blocks(const T* Q, const T* Qaux, const T* p, T dt, T* out) {{
+    // out[(blk*VAM_NP + k)*VAM_NP + l] = block `blk`, row k, col l
+{pblock_body}
+}}
 
 template <typename T>
 PORTABLE_FN inline void vam_pressure_residual(const T* Q, const T* Qaux, const T* p, T dt, T* out) {{
