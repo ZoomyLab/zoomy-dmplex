@@ -67,7 +67,14 @@ public:
         
         Mat P;
         PetscCall(DMCreateMatrix(solver->dmQ, &P));
-        PetscCall(TSSetIJacobian(ts, NULL, P, IJacobianWrapper, solver));
+        // REQ-165: Amat must be P, not NULL. With Amat=NULL the KSP has no
+        // assembled operator to MatMult and TSARKIMEX dies on the FIRST implicit
+        // stage with "Object is in wrong state: Not for unassembled matrix"
+        // (MatMult -> PCApplyBAorAB -> KSPGMRESCycle). ImplicitStrategy below
+        // already passes (P, P); this path was simply never run. FormSourceJacobian
+        // assembles P (ModularSolver.hpp:391/451), so the same matrix serves as
+        // both operator and preconditioner.
+        PetscCall(TSSetIJacobian(ts, P, P, IJacobianWrapper, solver));
         PetscCall(MatDestroy(&P));
 
         PetscCall(TSSetType(ts, TSARKIMEX)); 
