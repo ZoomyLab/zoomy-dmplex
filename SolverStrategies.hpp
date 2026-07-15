@@ -101,7 +101,29 @@ private:
     }
 
     static PetscErrorCode IJacobianWrapper(TS ts, PetscReal t, Vec X, Vec X_dot, PetscReal a, Mat J, Mat P, void* ctx) {
-        return ((ModularSolver*)ctx)->FormSourceJacobian(t, X, a, P);
+        ModularSolver* solver = (ModularSolver*)ctx;
+        // IMEX: only the (stiff) source is implicit, so P is the source Jacobian.
+        PetscCall(solver->FormSourceJacobian(t, X, a, P));
+
+        // ...but the Amat J must still be handled, or PETSc's matrix-free JFNK
+        // is unusable: with -snes_mf/-snes_mf_operator PETSc swaps J for a
+        // MATMFFD, and this callback is where its base vector gets set. Ignoring
+        // J (as this wrapper did) makes -snes_mf die at Newton iteration 0 and
+        // -snes_mf_operator error with
+        //   "MatMFFDSetBase() has not been called, this is often caused by
+        //    forgetting to call MatAssemblyBegin/End on the first Mat in the
+        //    SNES compute function"
+        // ImplicitStrategy::IJacobianWrapper below already does exactly this;
+        // the IMEX copy had simply never been exercised (same story as the
+        // NULL-Amat bug in SetupTS, REQ-165/00396ff).
+        if (J && J != P) {
+            PetscBool is_mffd;
+            PetscCall(PetscObjectTypeCompare((PetscObject)J, MATMFFD, &is_mffd));
+            if (is_mffd) PetscCall(MatMFFDSetBase(J, X, NULL));
+            PetscCall(MatAssemblyBegin(J, MAT_FINAL_ASSEMBLY));
+            PetscCall(MatAssemblyEnd(J, MAT_FINAL_ASSEMBLY));
+        }
+        return PETSC_SUCCESS;
     }
 };
 
