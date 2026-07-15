@@ -68,6 +68,13 @@ class ChorinVAMSolver : public MUSCLSolver {
     DM dmP = nullptr, dmCA = nullptr;
     Vec Pv = nullptr, Rhs = nullptr, R0 = nullptr, CA = nullptr, Pcur = nullptr;
     Mat Aop = nullptr;
+    // REQ-172: assembled block Pmat (preconditioner operand) + the scalar
+    // derivative stencils its blocks multiply. Sblk[i] == nullptr means block i
+    // is the undifferentiated A0 (stencil = identity, no matrix needed).
+    Mat Pmat = nullptr;
+    Mat Sblk[VAM_N_PBLOCK] = {nullptr};
+    bool use_gamg = true;                   // ZOOMY_VAM_PCNONE=1 restores PCNONE
+    bool pmat_verified = false;             // consistency gate runs once, after step 1
     KSP ksp = nullptr;
     PetscInt cS = 0, cE = 0;
     PetscReal dt_chorin = 0.0;
@@ -95,6 +102,13 @@ public:
             if (time + dt_chorin > settings.solver.t_end) dt_chorin = settings.solver.t_end - time;
             PetscCall(Predictor(dt_chorin));
             PetscCall(ComputeFrozenAux());
+            // run the Pmat consistency gate ONCE, here -- dt and the frozen
+            // state are real only after the first predictor (see SetupChorin).
+            if (use_gamg && !pmat_verified && getenv("ZOOMY_VAM_VERIFY_PMAT")) {
+                PetscCall(AssemblePmat());
+                PetscCall(VerifyPmat());
+                pmat_verified = true;
+            }
             if (getenv("VAM_NO_PRESSURE") == nullptr) {
                 PetscCall(PressureSolve());
                 PetscCall(Corrector());
@@ -139,6 +153,202 @@ private:
         PetscFunctionReturn(PETSC_SUCCESS);
     }
 
+    // ── REQ-172: assemble the pressure operator for a preconditioner ──────
+    // Build the SCALAR Green-Gauss first-derivative matrix for `axis`, mirroring
+    // UserFunctions.H::compute_derivative EXACTLY (same face loop, same 0.5
+    // face averaging, same zero-Neumann boundary, same /vol). If these two ever
+    // drift apart the Pmat stops being a preconditioner for the real operator --
+    // which the consistency gate (VerifyPmat) is there to catch.
+    //   interior face (L,R):  D[L][L] += 0.5*N,  D[L][R] += 0.5*N
+    //                         D[R][L] -= 0.5*N,  D[R][R] -= 0.5*N
+    //   boundary face (L):    D[L][L] += N          (face value = cell value)
+    //   then row c /= vol[c]
+    PetscErrorCode BuildDeriv1Mat(int axis, Mat *out) {
+        PetscFunctionBeginUser;
+        const PetscInt nc = cE - cS;
+        Mat D;
+        PetscCall(MatCreate(PETSC_COMM_WORLD, &D));
+        PetscCall(MatSetSizes(D, nc, nc, PETSC_DETERMINE, PETSC_DETERMINE));
+        PetscCall(MatSetType(D, MATAIJ));
+        PetscCall(MatSeqAIJSetPreallocation(D, 8, NULL));
+        PetscCall(MatMPIAIJSetPreallocation(D, 8, NULL, 8, NULL));
+        PetscCall(MatSetOption(D, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE));
+
+        Vec faceGeom, cellGeom;
+        PetscCall(DMPlexGetGeometryFVM(dmQ, &faceGeom, &cellGeom, NULL));
+        const PetscScalar *fG, *cG;
+        PetscCall(VecGetArrayRead(faceGeom, &fG));
+        PetscCall(VecGetArrayRead(cellGeom, &cG));
+        DM dmFace; PetscCall(VecGetDM(faceGeom, &dmFace));
+        PetscSection secFace; PetscCall(DMGetLocalSection(dmFace, &secFace));
+        DM dmCell; PetscCall(VecGetDM(cellGeom, &dmCell));
+        PetscSection secCell; PetscCall(DMGetLocalSection(dmCell, &secCell));
+
+        PetscInt fS, fE; PetscCall(DMPlexGetHeightStratum(dmQ, 1, &fS, &fE));
+        for (PetscInt f = fS; f < fE; ++f) {
+            PetscInt off; PetscCall(PetscSectionGetOffset(secFace, f, &off));
+            const PetscFVFaceGeom *fg = (const PetscFVFaceGeom *)&fG[off];
+            const PetscInt *cells; PetscInt ns;
+            PetscCall(DMPlexGetSupportSize(dmQ, f, &ns));
+            PetscCall(DMPlexGetSupport(dmQ, f, &cells));
+            const PetscReal Nax = fg->normal[axis];         // PETSc normal is AREA-weighted
+            if (ns == 2) {
+                const PetscInt L = cells[0] - cS, R = cells[1] - cS;
+                if (L < 0 || L >= nc || R < 0 || R >= nc) continue;
+                PetscScalar h = 0.5 * Nax;
+                PetscCall(MatSetValue(D, L, L,  h, ADD_VALUES));
+                PetscCall(MatSetValue(D, L, R,  h, ADD_VALUES));
+                PetscCall(MatSetValue(D, R, L, -h, ADD_VALUES));
+                PetscCall(MatSetValue(D, R, R, -h, ADD_VALUES));
+            } else if (ns == 1) {
+                const PetscInt L = cells[0] - cS;
+                if (L < 0 || L >= nc) continue;
+                PetscCall(MatSetValue(D, L, L, Nax, ADD_VALUES));
+            }
+        }
+        PetscCall(MatAssemblyBegin(D, MAT_FINAL_ASSEMBLY));
+        PetscCall(MatAssemblyEnd(D, MAT_FINAL_ASSEMBLY));
+        // row c /= vol[c]
+        Vec invvol; PetscCall(MatCreateVecs(D, NULL, &invvol));
+        PetscScalar *iv; PetscCall(VecGetArray(invvol, &iv));
+        for (PetscInt c = cS; c < cE; ++c) {
+            PetscInt offc; PetscCall(PetscSectionGetOffset(secCell, c, &offc));
+            const PetscFVCellGeom *cg = (const PetscFVCellGeom *)&cG[offc];
+            iv[c - cS] = (cg->volume > 0.0) ? 1.0 / cg->volume : 0.0;
+        }
+        PetscCall(VecRestoreArray(invvol, &iv));
+        PetscCall(MatDiagonalScale(D, invvol, NULL));       // left-scale rows
+        PetscCall(VecDestroy(&invvol));
+        PetscCall(VecRestoreArrayRead(faceGeom, &fG));
+        PetscCall(VecRestoreArrayRead(cellGeom, &cG));
+        *out = D;
+        PetscFunctionReturn(PETSC_SUCCESS);
+    }
+
+    // Assemble Pmat = sum_blk B_blk(cell) (x) S_blk, where S_blk is the scalar
+    // stencil the block multiplies (I for A0, Dx for Ax, Dx*Dx for Axx, ...) and
+    // B_blk(cell) is the NP x NP coefficient block from the generated
+    // vam_pressure_blocks() at that cell's frozen state.
+    //   Pmat[(c,k), (c',l)] += B_blk[c][k][l] * S_blk[c][c']
+    // ⚠ BLOCK SIZE NP IS THE WHOLE POINT (@amrex REQ-172 LFA: rho(D^-1 M) =
+    // 3.9/1.8 > 1 => the mode block is coupling-dominated, so point and per-mode
+    // preconditioners are GUARANTEED to diverge; only the full NP x NP block
+    // converges). MatSetBlockSize makes GAMG aggregate mode-blocks and smooth
+    // block-wise -- i.e. point-block-Jacobi as the MG smoother.
+    PetscErrorCode AssemblePmat() {
+        PetscFunctionBeginUser;
+        const PetscInt nc = cE - cS;
+        if (!Pmat) {
+            PetscCall(MatCreate(PETSC_COMM_WORLD, &Pmat));
+            PetscCall(MatSetSizes(Pmat, nc * NP, nc * NP, PETSC_DETERMINE, PETSC_DETERMINE));
+            PetscCall(MatSetType(Pmat, MATAIJ));
+            PetscCall(MatSetBlockSize(Pmat, NP));            // <- the LFA requirement
+            PetscCall(MatSeqAIJSetPreallocation(Pmat, 24 * NP, NULL));
+            PetscCall(MatMPIAIJSetPreallocation(Pmat, 24 * NP, NULL, 24 * NP, NULL));
+            PetscCall(MatSetOption(Pmat, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE));
+        }
+        PetscCall(MatZeroEntries(Pmat));
+
+        const PetscScalar *x, *ca;
+        PetscCall(VecGetArrayRead(X, &x));
+        PetscCall(VecGetArrayRead(CA, &ca));
+        for (PetscInt c = cS; c < cE; ++c) {
+            const PetscScalar *qc, *ac;
+            PetscCall(DMPlexPointGlobalRead(dmQ, c, x, &qc));
+            PetscCall(DMPlexPointGlobalRead(dmCA, c, ca, &ac));
+            if (!qc || !ac) continue;
+            // the blocks read the FULL NF state; P entries are irrelevant (the
+            // operator is affine in P, so its coefficients do not depend on P)
+            Real Q[NF];
+            for (int i = 0; i < NS; ++i) Q[i] = qc[i];
+            for (int j = 0; j < NP; ++j) Q[VAM_P_IDX[j]] = 0.0;
+            Real B[VAM_N_PBLOCK * NP * NP];
+            vam_pressure_blocks<Real>(Q, ac, parameters.data(), (Real)dt_chorin, B);
+
+            const PetscInt r = c - cS;
+            for (int blk = 0; blk < VAM_N_PBLOCK; ++blk) {
+                const Real *Bb = &B[blk * NP * NP];
+                Mat S = Sblk[blk];
+                if (!S) {                                    // A0: stencil is I
+                    for (int k = 0; k < NP; ++k)
+                        for (int l = 0; l < NP; ++l)
+                            PetscCall(MatSetValue(Pmat, r * NP + k, r * NP + l,
+                                                  Bb[k * NP + l], ADD_VALUES));
+                    continue;
+                }
+                PetscInt ncols; const PetscInt *cols; const PetscScalar *vals;
+                PetscCall(MatGetRow(S, r, &ncols, &cols, &vals));
+                for (PetscInt j = 0; j < ncols; ++j) {
+                    if (vals[j] == 0.0) continue;
+                    for (int k = 0; k < NP; ++k)
+                        for (int l = 0; l < NP; ++l) {
+                            const PetscScalar v = Bb[k * NP + l] * vals[j];
+                            if (v != 0.0)
+                                PetscCall(MatSetValue(Pmat, r * NP + k, cols[j] * NP + l,
+                                                      v, ADD_VALUES));
+                        }
+                }
+                PetscCall(MatRestoreRow(S, r, &ncols, &cols, &vals));
+            }
+        }
+        PetscCall(VecRestoreArrayRead(X, &x));
+        PetscCall(VecRestoreArrayRead(CA, &ca));
+        PetscCall(MatAssemblyBegin(Pmat, MAT_FINAL_ASSEMBLY));
+        PetscCall(MatAssemblyEnd(Pmat, MAT_FINAL_ASSEMBLY));
+        PetscFunctionReturn(PETSC_SUCCESS);
+    }
+
+    // CONSISTENCY GATE: the assembled Pmat and the matrix-free residual must be
+    // the SAME operator, or the "preconditioner" is preconditioning a different
+    // problem and the Krylov solve silently converges to the wrong answer.
+    //   residual(P) - residual(0) == A*P  (the operator is affine)
+    // so compare Pmat*P against that for a random P. Runs once, opt-in.
+    PetscErrorCode VerifyPmat() {
+        PetscFunctionBeginUser;
+        Vec p, lhs, rhs, r0;
+        PetscCall(VecDuplicate(Pv, &p));
+        PetscCall(VecDuplicate(Pv, &lhs));
+        PetscCall(VecDuplicate(Pv, &rhs));
+        PetscCall(VecDuplicate(Pv, &r0));
+        PetscRandom rnd;
+        PetscCall(PetscRandomCreate(PETSC_COMM_WORLD, &rnd));
+        PetscCall(PetscRandomSetInterval(rnd, -1.0, 1.0));
+        PetscCall(VecSetRandom(p, rnd));
+        PetscCall(PetscRandomDestroy(&rnd));
+
+        PetscCall(VecZeroEntries(lhs));
+        PetscCall(PressureResidual(lhs, r0));       // r0 = residual(0)
+        PetscCall(PressureResidual(p, rhs));        // rhs = residual(P)
+        PetscCall(VecAXPY(rhs, -1.0, r0));          // rhs = A*P (matrix-free truth)
+        PetscCall(MatMult(Pmat, p, lhs));           // lhs = Pmat*P (assembled)
+        PetscReal nt, nd, nl;
+        PetscCall(VecNorm(rhs, NORM_2, &nt));       // ||A*P|| matrix-free
+        PetscCall(VecNorm(lhs, NORM_2, &nl));       // ||Pmat*P|| assembled
+        PetscCall(VecAXPY(lhs, -1.0, rhs));
+        PetscCall(VecNorm(lhs, NORM_2, &nd));
+        if (rank == 0) {
+            std::cout << "[Pmat] |Pmat*P| = " << nl << "   |A*P| = " << nt
+                      << "   |diff| = " << nd
+                      << "   rel = " << (nt > 0 ? nd / nt : nd) << std::endl;
+            // A zero operator satisfies "Pmat*P == A*P" trivially. That is how
+            // this check first passed with a PERFECT 0: it ran at setup, where
+            // dt_chorin == 0, so both sides were identically zero. Refuse to
+            // report a pass the test could not have failed.
+            if (nt == 0.0 || nl == 0.0)
+                std::cout << "[Pmat] ⚠ VACUOUS: an operand is identically zero "
+                             "(dt=" << dt_chorin << ") — this check proves NOTHING."
+                          << std::endl;
+            else if (nd / nt < 1e-10)
+                std::cout << "[Pmat] PASS: assembled operator == matrix-free operator" << std::endl;
+            else
+                std::cout << "[Pmat] 🔴 FAIL: the assembled Pmat is NOT the same "
+                             "operator as the matrix-free residual" << std::endl;
+        }
+        PetscCall(VecDestroy(&p)); PetscCall(VecDestroy(&lhs));
+        PetscCall(VecDestroy(&rhs)); PetscCall(VecDestroy(&r0));
+        PetscFunctionReturn(PETSC_SUCCESS);
+    }
+
     PetscErrorCode SetupChorin() {
         PetscFunctionBeginUser;
         PetscCall(CloneCellDM(NP, &dmP));
@@ -155,26 +365,56 @@ private:
         PetscCall(KSPSetOperators(ksp, Aop, Aop));
         PetscCall(KSPSetType(ksp, KSPGMRES));
         PetscCall(KSPGMRESSetRestart(ksp, 40));
-        // ⚠ MEASURED LIMITATION (2026-07-15, deliverable-4 sweep): PCNONE does not
-        // scale. GMRES iterations per pressure solve grow with the mesh --
-        //     240 cells 144 its | 960 cells 237 its | 3840 cells 400 its
-        // -- and at 3840 ALL solves hit the 400 cap and return DIVERGED_ITS
-        // (reason -3), i.e. the pressure is NOT converged to the 1e-9 tol and
-        // anything at/above that resolution is INVALID, not merely slow. It is
-        // also the reason the per-cell cost RISES with N (33.5 -> 216.7 ms/step
-        // for 4x the cells = N^1.35): an unpreconditioned Krylov solve on an
-        // elliptic operator is O(N^~0.5) in iterations.
-        //   The run WARNS (PressureSolve prints "[KSP] pressure NOT converged")
-        // but CONTINUES, so read that line before trusting a large-mesh result.
-        //   FIX (not attempted yet): Aop is a MatShell (matrix-free), so PCGAMG
-        // /PCILU cannot attach directly -- they need an assembled operator. Two
-        // routes: assemble A explicitly (it is affine, A*P + R0, so its columns
-        // can be probed) and hand it to PCGAMG as the Pmat; or supply a PCShell
-        // approximate inverse. Verified-good meshes today: <= 960 cells.
-        PC pc; PetscCall(KSPGetPC(ksp, &pc)); PetscCall(PCSetType(pc, PCNONE));
+
+        // ── REQ-172: block-aware PCGAMG on an ASSEMBLED Pmat ──────────────
+        // BACKGROUND (measured, deliverable-4 sweep): with PCNONE the GMRES
+        // iterations grow with the mesh -- 240:144, 960:237, 3840:400 -- and at
+        // 3840 every solve returns DIVERGED_ITS at the cap, so the pressure is
+        // NOT converged and results there are INVALID, not merely slow. It is
+        // also why per-cell cost RISES with N (33.5 -> 216.7 ms/step for 4x
+        // cells = N^1.35). @amrex hit the SAME wall at 1320 cells with entirely
+        // different linear algebra ⇒ the property is in the VAM pressure
+        // OPERATOR, not in either backend's solver.
+        //   @amrex's LFA says WHICH fix can work: rho(D^-1 M) = 3.9 (modal) /
+        // 1.8 (nodal), both > 1 ⇒ the NP x NP mode block is COUPLING-dominated,
+        // so point-Jacobi and per-mode multigrid are GUARANTEED to diverge (they
+        // measured both); only point-BLOCK-Jacobi converges, but it is O(N).
+        //   ⇒ the Pmat is assembled WITH BLOCK SIZE NP so GAMG aggregates
+        // mode-blocks and smooths block-wise -- point-block-Jacobi as the MG
+        // SMOOTHER, the one combination that both converges and can be
+        // mesh-independent. A scalar/per-field PC here would BE their diverging
+        // per-mode MG. Aop (MatShell) stays the Amat = the true matvec; Pmat is
+        // only the preconditioner operand.
+        if (getenv("ZOOMY_VAM_PCNONE")) use_gamg = false;   // A/B against the old path
+        PC pc; PetscCall(KSPGetPC(ksp, &pc));
+        if (use_gamg) {
+            for (int blk = 0; blk < VAM_N_PBLOCK; ++blk) {
+                const VamPBlockSpec &s = VAM_PBLOCKS[blk];
+                if (s.ax1 < 0) { Sblk[blk] = nullptr; continue; }   // A0 -> identity
+                Mat D1; PetscCall(BuildDeriv1Mat(s.ax1, &D1));
+                if (s.ax2 < 0) { Sblk[blk] = D1; continue; }
+                Mat D2, prod;
+                PetscCall(BuildDeriv1Mat(s.ax2, &D2));
+                // second derivative = the SAME Deriv1 chain FillCA applies
+                PetscCall(MatMatMult(D2, D1, MAT_INITIAL_MATRIX, PETSC_DEFAULT, &prod));
+                PetscCall(MatDestroy(&D1)); PetscCall(MatDestroy(&D2));
+                Sblk[blk] = prod;
+            }
+            PetscCall(AssemblePmat());
+            PetscCall(KSPSetOperators(ksp, Aop, Pmat));
+            PetscCall(PCSetType(pc, PCGAMG));
+        } else {
+            PetscCall(PCSetType(pc, PCNONE));
+        }
         PetscCall(KSPSetTolerances(ksp, 1e-9, 1e-12, PETSC_DEFAULT, 400));
         PetscCall(KSPSetFromOptions(ksp));
         PetscCall(VecZeroEntries(Pv));
+        // NOTE: VerifyPmat is deliberately NOT called here. At SetupChorin time
+        // dt_chorin is still 0 and CA is unfilled, and EVERY pressure block
+        // carries a dt factor -> Pmat == 0 and residual(P)-residual(0) == 0, so
+        // the check compares zero to zero and reports a perfect 0 error. It is
+        // run from the step loop instead, after the first Predictor +
+        // ComputeFrozenAux, where dt and the frozen state are real.
         PetscFunctionReturn(PETSC_SUCCESS);
     }
 
@@ -182,6 +422,8 @@ private:
         PetscFunctionBeginUser;
         if (ksp) PetscCall(KSPDestroy(&ksp));
         if (Aop) PetscCall(MatDestroy(&Aop));
+        if (Pmat) PetscCall(MatDestroy(&Pmat));
+        for (int i = 0; i < VAM_N_PBLOCK; ++i) if (Sblk[i]) PetscCall(MatDestroy(&Sblk[i]));
         for (Vec *v : {&Pv,&Rhs,&R0,&CA,&Pcur}) if (*v) PetscCall(VecDestroy(v));
         if (dmP) PetscCall(DMDestroy(&dmP));
         if (dmCA) PetscCall(DMDestroy(&dmCA));
@@ -301,6 +543,11 @@ private:
     }
     PetscErrorCode PressureSolve() {
         PetscFunctionBeginUser;
+        // The blocks carry dt AND the frozen predictor state (h, b_x, h_x, ...),
+        // both of which change every step, so the Pmat must be re-assembled --
+        // a stale Pmat is still a valid preconditioner (it only slows GMRES) but
+        // it drifts from the operator and costs iterations.
+        if (use_gamg) PetscCall(AssemblePmat());
         PetscCall(VecZeroEntries(Pcur));
         PetscCall(PressureResidual(Pcur, R0));       // R0 = residual(P=0)
         PetscCall(VecCopy(R0, Rhs)); PetscCall(VecScale(Rhs, -1.0));
