@@ -155,6 +155,22 @@ private:
         PetscCall(KSPSetOperators(ksp, Aop, Aop));
         PetscCall(KSPSetType(ksp, KSPGMRES));
         PetscCall(KSPGMRESSetRestart(ksp, 40));
+        // ⚠ MEASURED LIMITATION (2026-07-15, deliverable-4 sweep): PCNONE does not
+        // scale. GMRES iterations per pressure solve grow with the mesh --
+        //     240 cells 144 its | 960 cells 237 its | 3840 cells 400 its
+        // -- and at 3840 ALL solves hit the 400 cap and return DIVERGED_ITS
+        // (reason -3), i.e. the pressure is NOT converged to the 1e-9 tol and
+        // anything at/above that resolution is INVALID, not merely slow. It is
+        // also the reason the per-cell cost RISES with N (33.5 -> 216.7 ms/step
+        // for 4x the cells = N^1.35): an unpreconditioned Krylov solve on an
+        // elliptic operator is O(N^~0.5) in iterations.
+        //   The run WARNS (PressureSolve prints "[KSP] pressure NOT converged")
+        // but CONTINUES, so read that line before trusting a large-mesh result.
+        //   FIX (not attempted yet): Aop is a MatShell (matrix-free), so PCGAMG
+        // /PCILU cannot attach directly -- they need an assembled operator. Two
+        // routes: assemble A explicitly (it is affine, A*P + R0, so its columns
+        // can be probed) and hand it to PCGAMG as the Pmat; or supply a PCShell
+        // approximate inverse. Verified-good meshes today: <= 960 cells.
         PC pc; PetscCall(KSPGetPC(ksp, &pc)); PetscCall(PCSetType(pc, PCNONE));
         PetscCall(KSPSetTolerances(ksp, 1e-9, 1e-12, PETSC_DEFAULT, 400));
         PetscCall(KSPSetFromOptions(ksp));
