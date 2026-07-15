@@ -12,17 +12,27 @@
 //   on the AFFINE operator) -> corrector (pointwise, uses grad P).
 //
 // The predictor NSM DROPS the pressure modes (no evolution eq), so the evolved
-// state X is NS=8 dof: [b,h,q_x0,q_x1,q_y0,q_y1,r0,r1]. The pressure P (NP=2)
-// lives in a SEPARATE vector Pv. The generated ChorinOps read the FULL 10-state
-// Q = [X(8), P(2)] — assembled per cell here. The corrector updates X[2..7].
-// Derivative-aux array CA (20/cell): CA[0..7]=P first+second x/y derivs
-// (recomputed each matvec), CA[8..19]=frozen b/h(1st+2nd)+q(1st) (once/step).
+// state X is NS dof: dim=2 -> [b,h,q_0,q_1,r_0,r_1]; dim=3 -> [b,h,q_x0,q_x1,
+// q_y0,q_y1,r0,r1]. The pressure P (NP) lives in a SEPARATE vector Pv. The
+// generated ChorinOps read the FULL NF-state Q = [X(NS), P(NP)] — assembled per
+// cell here. The corrector updates the VAM_CORR_IDX slots. Derivative-aux array
+// CA (NCA/cell): the leading 2*NP*dim entries are the P first+second derivs
+// (recomputed each matvec), the rest are frozen b/h(1st+2nd)+q(1st) (once/step).
+//
+// ⚠ ALL SHAPE CONSTANTS COME FROM THE GENERATED ChorinOps.H — never hard-code
+// them. They change with `dimension` (dim=2: NF=8/NCA=10; dim=3: NF=10/NCA=20),
+// and a stale hard-coded dim=3 layout indexes a dim=2 run silently out of range.
 // ─────────────────────────────────────────────────────────────────────────
 class ChorinVAMSolver : public MUSCLSolver {
-    static constexpr int NS = 8;      // evolved state dof (Model<Real>::n_dof_q)
-    static constexpr int NP = 2;      // pressure modes
-    static constexpr int NF = 10;     // full VAM state for ChorinOps
-    static constexpr int NCA = 20;    // derivative-aux entries per cell
+    static constexpr int NS = VAM_NS;    // evolved state dof (== Model<Real>::n_dof_q)
+    static constexpr int NP = VAM_NP;    // pressure modes
+    static constexpr int NF = VAM_NF;    // full VAM state for ChorinOps
+    static constexpr int NCA = VAM_NCA;  // derivative-aux entries per cell
+    // the generated predictor MUST agree with the generated ops, or the
+    // per-cell assembly below reads the wrong slots.
+    static_assert(NS == Model<double>::n_dof_q,
+                  "ChorinOps.H VAM_NS != Model.H n_dof_q — Model.H/ChorinOps.H "
+                  "generated from different `dimension`; re-run create_vam_model.py");
     DM dmP = nullptr, dmCA = nullptr;
     Vec Pv = nullptr, Rhs = nullptr, R0 = nullptr, CA = nullptr, Pcur = nullptr;
     Mat Aop = nullptr;
@@ -170,27 +180,41 @@ private:
         compute_derivative<Real>(out.data(), fld.data(), axis==0?1:0, axis==1?1:0, 0, mesh);
     }
 
-    // 12 frozen aux CA[8..19] from X (b=0,h=1,q_x0=2,q_x1=3,q_y0=4,q_y1=5).
-    PetscErrorCode ComputeFrozenAux() {
+    // Fill the CA slots selected by `want_P`, driven ENTIRELY by the generated
+    // VAM_CA table (never by a hand-written index list: the layout is
+    // name->index and changes with `dimension` — a dim=3 table writes P0_y into
+    // dim=2's P_1_x slot, silently).
+    //   want_P=false -> frozen state aux (b/h/q), read from X on dmQ, once/step
+    //   want_P=true  -> pressure aux, read from the given P vector on dmP,
+    //                   recomputed every KSP matvec from the current iterate
+    PetscErrorCode FillCA(bool want_P, Vec Pvec) {
         PetscFunctionBeginUser;
         std::vector<Real> f, d, dd;
-        auto d1 = [&](int sidx, int ax, int ca){ (void)ExtractField(dmQ,X,sidx,f); Deriv1(f,ax,d); (void)StoreCA(ca,d); };
-        auto d2 = [&](int sidx, int ax, int ca){ (void)ExtractField(dmQ,X,sidx,f); Deriv1(f,ax,d); Deriv1(d,ax,dd); (void)StoreCA(ca,dd); };
-        d1(0,0,8); d2(0,0,9); d1(0,1,10); d2(0,1,11);      // b_x,b_xx,b_y,b_yy
-        d1(1,0,12); d2(1,0,13); d1(1,1,14); d2(1,1,15);    // h_x,h_xx,h_y,h_yy
-        d1(2,0,16); d1(3,0,17); d1(4,1,18); d1(5,1,19);    // q_x0_x,q_x1_x,q_y0_y,q_y1_y
+        for (int j = 0; j < NCA; ++j) {
+            const VamAuxSpec &s = VAM_CA[j];
+            if (s.is_P != want_P) continue;
+            if (want_P) {
+                // s.field indexes the FULL state; map it to the P vector's own
+                // component (P_0 -> 0, P_1 -> 1) via VAM_P_IDX.
+                int pc = -1;
+                for (int k = 0; k < NP; ++k) if (VAM_P_IDX[k] == s.field) pc = k;
+                if (pc < 0) SETERRQ(PETSC_COMM_WORLD, PETSC_ERR_PLIB,
+                                    "CA[%d] flagged is_P but field %d is not a pressure mode", j, s.field);
+                PetscCall(ExtractField(dmP, Pvec, pc, f));
+            } else {
+                // frozen fields are always evolved-state slots (field < NS)
+                if (s.field >= NS) SETERRQ(PETSC_COMM_WORLD, PETSC_ERR_PLIB,
+                                           "CA[%d] frozen field %d >= NS=%d", j, s.field, NS);
+                PetscCall(ExtractField(dmQ, X, s.field, f));
+            }
+            Deriv1(f, s.ax1, d);
+            if (s.ax2 >= 0) { Deriv1(d, s.ax2, dd); PetscCall(StoreCA(j, dd)); }  // mixed ax1!=ax2 works
+            else            { PetscCall(StoreCA(j, d)); }
+        }
         PetscFunctionReturn(PETSC_SUCCESS);
     }
-    // 8 P-derivative aux CA[0..7] from a pressure vector P (fields 0=P_0,1=P_1).
-    PetscErrorCode ComputePAux(Vec P) {
-        PetscFunctionBeginUser;
-        std::vector<Real> f, d, dd;
-        auto d1 = [&](int pidx, int ax, int ca){ (void)ExtractField(dmP,P,pidx,f); Deriv1(f,ax,d); (void)StoreCA(ca,d); };
-        auto d2 = [&](int pidx, int ax, int ca){ (void)ExtractField(dmP,P,pidx,f); Deriv1(f,ax,d); Deriv1(d,ax,dd); (void)StoreCA(ca,dd); };
-        d1(0,0,0); d2(0,0,1); d1(0,1,2); d2(0,1,3);        // P0_x,P0_xx,P0_y,P0_yy
-        d1(1,0,4); d2(1,0,5); d1(1,1,6); d2(1,1,7);        // P1_x,P1_xx,P1_y,P1_yy
-        PetscFunctionReturn(PETSC_SUCCESS);
-    }
+    PetscErrorCode ComputeFrozenAux()   { return FillCA(false, nullptr); }
+    PetscErrorCode ComputePAux(Vec P)   { return FillCA(true,  P); }
 
     // residual(P) into `out` (NP/cell): refresh P-aux, assemble Q10 per cell, eval.
     PetscErrorCode PressureResidual(Vec P, Vec out) {
@@ -206,10 +230,13 @@ private:
             PetscCall(DMPlexPointGlobalRead(dmCA, c, ca, &a));
             PetscCall(DMPlexPointGlobalRef(dmP, c, o, &r));
             if (q8 && pc && a && r) {
-                Real Q[NF]; for (int i=0;i<NS;++i) Q[i]=q8[i]; Q[8]=pc[0]; Q[9]=pc[1];
+                // assemble the full NF-state the generated ops expect: X then P
+                Real Q[NF];
+                for (int i = 0; i < NS; ++i) Q[i] = q8[i];
+                for (int j = 0; j < NP; ++j) Q[VAM_P_IDX[j]] = pc[j];
                 Real res[NP];
                 vam_pressure_residual<Real>(Q, a, parameters.data(), (Real)dt_chorin, res);
-                r[0] = res[0]; r[1] = res[1];
+                for (int j = 0; j < NP; ++j) r[j] = res[j];
             }
         }
         PetscCall(VecRestoreArrayRead(X, &x)); PetscCall(VecRestoreArrayRead(P, &pp));
@@ -236,7 +263,8 @@ private:
             std::cout << "[KSP] pressure NOT converged (reason " << reason << ", " << its << " its)" << std::endl;
         PetscFunctionReturn(PETSC_SUCCESS);
     }
-    // corrector: refresh P-grad from the solved Pv, apply vam_corrector to X[2..7].
+    // corrector: refresh P-grad from the solved Pv, apply vam_corrector to the
+    // generated VAM_CORR_IDX slots (dim=2: q_0,q_1,r_0,r_1; dim=3: +q_y modes).
     PetscErrorCode Corrector() {
         PetscFunctionBeginUser;
         PetscCall(ComputePAux(Pv));
@@ -248,10 +276,12 @@ private:
             PetscCall(DMPlexPointGlobalRead(dmP, c, pp, &pc));
             PetscCall(DMPlexPointGlobalRead(dmCA, c, ca, &a));
             if (q8 && pc && a) {
-                Real Q[NF]; for (int i=0;i<NS;++i) Q[i]=q8[i]; Q[8]=pc[0]; Q[9]=pc[1];
-                Real upd[6];
+                Real Q[NF];
+                for (int i = 0; i < NS; ++i) Q[i] = q8[i];
+                for (int j = 0; j < NP; ++j) Q[VAM_P_IDX[j]] = pc[j];
+                Real upd[VAM_N_CORR];
                 vam_corrector<Real>(Q, a, parameters.data(), (Real)dt_chorin, upd);
-                for (int i = 0; i < 6; ++i) q8[2 + i] = upd[i];
+                for (int j = 0; j < VAM_N_CORR; ++j) q8[VAM_CORR_IDX[j]] = upd[j];
             }
         }
         PetscCall(VecRestoreArrayRead(Pv, &pp)); PetscCall(VecRestoreArrayRead(CA, &ca)); PetscCall(VecRestoreArray(X, &x));
