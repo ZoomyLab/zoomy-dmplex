@@ -3,6 +3,8 @@
 
 #include "MUSCLSolver.hpp"      // pulls Model.H -> defines ZOOMY_MODEL_IS_VAM iff VAM
 #include <petscksp.h>
+#include <cmath>                // std::isfinite  (DIAG NaN guard)
+#include <limits>               // numeric_limits::infinity  (DIAG NaN guard)
 
 // ─────────────────────────────────────────────────────────────────────────
 // REQ-169 (speed): main.cpp includes this header unconditionally and does
@@ -598,20 +600,38 @@ private:
         // each step. If h_min degrades BEFORE ||P|| blows up the pressure is a
         // victim; if ||P|| explodes first the operator is the problem.
         if (getenv("ZOOMY_VAM_DIAG")) {
-            PetscReal np_, nr_, hmin = 1e300, pn = -1;
+            // 🔴 NaN-BLINDNESS, fixed. `if (qc[1] < hmin)` seeded from 1e300
+            // SILENTLY SKIPS NaN -- every comparison against NaN is false -- so
+            // an all-NaN state printed "h_min=1e+300", which reads as "h is
+            // huge" but actually means "I MEASURED NOTHING". That is precisely
+            // the opposite of the cause-vs-victim verdict this block exists to
+            // give, and it is the reason my N=960 diagnosis stalled. Count the
+            // non-finite cells explicitly; never let them vanish into a min.
+            PetscReal np_, nr_, pn = -1;
+            PetscReal hmin = std::numeric_limits<PetscReal>::infinity();
+            PetscInt  nbad = 0, ncell = 0;
             PetscCall(VecNorm(Pv, NORM_2, &np_));
             PetscCall(VecNorm(Rhs, NORM_2, &nr_));
             if (Pmat) PetscCall(MatNorm(Pmat, NORM_INFINITY, &pn));
             const PetscScalar *xa; PetscCall(VecGetArrayRead(X, &xa));
             for (PetscInt c = cS; c < cE; ++c) {
                 const PetscScalar *qc; PetscCall(DMPlexPointGlobalRead(dmQ, c, xa, &qc));
-                if (qc && qc[1] < hmin) hmin = qc[1];
+                if (!qc) continue;
+                ++ncell;
+                const PetscReal h = PetscRealPart(qc[1]);
+                if (!std::isfinite(h)) { ++nbad; continue; }
+                if (h < hmin) hmin = h;
             }
             PetscCall(VecRestoreArrayRead(X, &xa));
-            if (rank == 0)
+            if (rank == 0) {
                 std::cout << "[DIAG] reason=" << reason << " its=" << its
                           << "  |P|=" << np_ << "  |rhs|=" << nr_
-                          << "  |Pmat|_inf=" << pn << "  h_min=" << hmin << std::endl;
+                          << "  |Pmat|_inf=" << pn;
+                if (nbad) std::cout << "  h_NONFINITE=" << nbad << "/" << ncell;
+                if (nbad == ncell) std::cout << "  h_min=<NONE FINITE>";
+                else               std::cout << "  h_min=" << hmin;
+                std::cout << std::endl;
+            }
         }
         PetscFunctionReturn(PETSC_SUCCESS);
     }

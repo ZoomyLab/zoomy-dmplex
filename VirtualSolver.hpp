@@ -281,6 +281,14 @@ protected:
     virtual PetscErrorCode SetupAuxiliaryConditions() { return PETSC_SUCCESS; }
     
     PetscReal ComputeTimeStep() {
+        // TEMP DIAGNOSTIC (REQ-172): pin dt to break the Chorin death spiral.
+        // dt = cfl*minRadius/glob_eig, so a garbage corrector velocity inflates
+        // glob_eig -> dt collapses -> |Pmat| (which scales with dt) -> 0 ->
+        // P = A^-1 b -> inf -> worse velocity. Pinning dt severs that feedback:
+        // if the pressure still explodes at fixed dt the instability is in the
+        // FORMULATION; if it settles, the spiral is the CFL adapter reacting to
+        // its own output. Diagnostic only -- never a run mode.
+        if (const char *e = getenv("ZOOMY_VAM_FIXED_DT")) return atof(e);
         Vec X_loc, A_loc; const PetscScalar *x, *a;
         PetscCall(DMGetLocalVector(dmQ, &X_loc)); PetscCall(DMGlobalToLocalBegin(dmQ, X, INSERT_VALUES, X_loc)); PetscCall(DMGlobalToLocalEnd(dmQ, X, INSERT_VALUES, X_loc));
         PetscCall(DMGetLocalVector(dmAux, &A_loc)); PetscCall(DMGlobalToLocalBegin(dmAux, A, INSERT_VALUES, A_loc)); PetscCall(DMGlobalToLocalEnd(dmAux, A, INSERT_VALUES, A_loc));
