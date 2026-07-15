@@ -1,0 +1,27 @@
+{
+  "name": "VAM_escalante_bump_1d",
+  "io": {
+    "directory": "outputs/n9pb",
+    "filename": "n9pb",
+    "snapshots": 40,
+    "snapshot_logic": "interpolate",
+    "clean_directory": true,
+    "mesh_path": "./bump_1d.msh",
+    "initial_condition_file": "./bump_ic.h5",
+    "initial_condition_mask": [
+      0,
+      1
+    ],
+    "write_3d": false
+  },
+  "solver": {
+    "t_end": 0.01,
+    "cfl": 0.3,
+    "dt": 0.000331704854077566,
+    "reconstruction_order": 0,
+    "method": "chorin",
+    "time_integration": "splitting",
+    "refresh_derivative_aux": false,
+    "positivity": "mood"
+  }
+}
