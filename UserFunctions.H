@@ -1,6 +1,8 @@
 #pragma once
 #include <cmath>
 #include <vector>
+#include <algorithm>
+#include <Eigen/Dense>
 #include <petscdmplex.h>
 
 // Backend implementations of the opaque placeholder kernels the zoomy_core C++
@@ -82,4 +84,82 @@ inline void compute_derivative(T* result, const T* source,
         if (vol > (T)0) result[c - cStart] = grad[(c - cStart) * dim + axis] / vol;
     }
     VecRestoreArrayRead(faceGeom, &fG); VecRestoreArrayRead(cellGeom, &cG);
+}
+
+// ── eigensystem ──────────────────────────────────────────────────────────
+// REQ-168 (user directive 2026-07-15): every backend implements every opaque
+// UserFunction. Mirrors foam's `numerics::eigensystem` and numpy's
+// `_eigensystem_numpy`: given the component index `idx` followed by the flat
+// row-major normal-projected quasilinear matrix A (n*n entries), return the
+// idx-th entry of the stacked decomposition
+//     [ eigenvalues lambda (n), right eigenvectors R (n*n), left L = R^-1 (n*n) ]
+// The printer emits the n+2n^2 component reads of ONE face with identical
+// A_flat args; the 1-slot cache makes them share a single decomposition —
+// required for CORRECTNESS (R, |Lambda| and L must come from the SAME
+// eigenbasis so the Roe dissipation |A| = R|Lambda|L is consistent), not just
+// speed. |A| is invariant to eigenpair ordering, so Eigen-vs-LAPACK order is
+// harmless. Realised with Eigen (PETSc is configured --download-eigen).
+template <typename I, typename... Ts>
+inline double eigensystem(I idx_, Ts... a_flat_args) {
+    const int idx = static_cast<int>(idx_);
+    const double a_flat[] = { static_cast<double>(a_flat_args)... };
+    constexpr int M = sizeof...(a_flat_args);
+    const int n = static_cast<int>(std::lround(std::sqrt(double(M))));
+
+    static thread_local std::vector<double> cache_key, cache_out;
+    bool hit = (static_cast<int>(cache_key.size()) == M);
+    for (int k = 0; hit && k < M; ++k) hit = (cache_key[k] == a_flat[k]);
+
+    if (!hit) {
+        Eigen::MatrixXd A(n, n);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) A(i, j) = a_flat[i * n + j];
+        Eigen::EigenSolver<Eigen::MatrixXd> es(A);
+        const Eigen::VectorXd w = es.eigenvalues().real();
+        const Eigen::MatrixXd V = es.eigenvectors().real();     // cols = eigvecs
+        Eigen::MatrixXd L;
+        Eigen::FullPivLU<Eigen::MatrixXd> lu(V);
+        if (lu.isInvertible()) L = lu.inverse();
+        else                   L = V.completeOrthogonalDecomposition().pseudoInverse();
+
+        cache_out.assign(n + 2 * n * n, 0.0);
+        for (int i = 0; i < n; ++i) cache_out[i] = w(i);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) cache_out[n + i * n + j] = V(i, j);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) cache_out[n + n * n + i * n + j] = L(i, j);
+        cache_key.assign(a_flat, a_flat + M);
+    }
+    return cache_out[idx];
+}
+
+// ── solve ────────────────────────────────────────────────────────────────
+// The idx-th component of the PER-CELL dense linear solve A^-1 b, emitted by
+// the NSM's point-implicit source linearization (`source_treatment='linearized'`:
+// S_lin = (I - dt*J)^-1 S, so A = I - dt*J, b = S). Args are `idx` then the flat
+// row-major A (n*n) followed by b (n) => M = n*n + n. LOCAL per cell (no mesh
+// coupling) — unrelated to the VAM pressure solve, which is a global PETSc KSP.
+// Same 1-slot cache: the n component reads of one cell share one factorisation.
+template <typename I, typename... Ts>
+inline double solve(I idx_, Ts... args) {
+    const int idx = static_cast<int>(idx_);
+    const double v[] = { static_cast<double>(args)... };
+    constexpr int M = sizeof...(args);
+    // M = n^2 + n  =>  n = (-1 + sqrt(1+4M))/2
+    const int n = static_cast<int>(std::lround((-1.0 + std::sqrt(1.0 + 4.0 * double(M))) / 2.0));
+
+    static thread_local std::vector<double> cache_key, cache_out;
+    bool hit = (static_cast<int>(cache_key.size()) == M);
+    for (int k = 0; hit && k < M; ++k) hit = (cache_key[k] == v[k]);
+
+    if (!hit) {
+        Eigen::MatrixXd A(n, n); Eigen::VectorXd b(n);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) A(i, j) = v[i * n + j];
+        for (int i = 0; i < n; ++i) b(i) = v[n * n + i];
+        const Eigen::VectorXd x = A.colPivHouseholderQr().solve(b);
+        cache_out.assign(x.data(), x.data() + n);
+        cache_key.assign(v, v + M);
+    }
+    return cache_out[idx];
 }
