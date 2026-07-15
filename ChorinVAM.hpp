@@ -80,6 +80,7 @@ class ChorinVAMSolver : public MUSCLSolver {
     KSP ksp = nullptr;
     PetscInt cS = 0, cE = 0;
     PetscReal dt_chorin = 0.0;
+    PetscReal corr_max  = 0.0;   // REQ-172: max |(dt/rho)grad P| correction this step (@amrex's metric)
 
 public:
     PetscErrorCode Run(int argc, char **argv) override {
@@ -100,6 +101,7 @@ public:
         PetscCall(WriteSnapshot(time));
         while (time < settings.solver.t_end) {
             dt_chorin = std::max(ComputeTimeStep(), settings.solver.min_dt);
+            corr_max  = 0.0;
             // land exactly on t_end (see MUSCLSolver; REQ-159)
             if (time + dt_chorin > settings.solver.t_end) dt_chorin = settings.solver.t_end - time;
             PetscCall(Predictor(dt_chorin));
@@ -625,6 +627,7 @@ private:
             PetscCall(VecRestoreArrayRead(X, &xa));
             if (rank == 0) {
                 std::cout << "[DIAG] reason=" << reason << " its=" << its
+                          << "  dt=" << dt_chorin
                           << "  |P|=" << np_ << "  |rhs|=" << nr_
                           << "  |Pmat|_inf=" << pn;
                 if (nbad) std::cout << "  h_NONFINITE=" << nbad << "/" << ncell;
@@ -653,10 +656,29 @@ private:
                 for (int j = 0; j < NP; ++j) Q[VAM_P_IDX[j]] = pc[j];
                 Real upd[VAM_N_CORR];
                 vam_corrector<Real>(Q, a, parameters.data(), (Real)dt_chorin, upd);
-                for (int j = 0; j < VAM_N_CORR; ++j) q8[VAM_CORR_IDX[j]] = upd[j];
+                // REQ-172 (@amrex's metric): the PHYSICAL quantity is the
+                // projection's correction to the momentum, ~ (dt/rho)*grad P --
+                // NOT |P|. The corrector OVERWRITES the slot, so the correction
+                // is upd - q_before. |P| can be large by scaling alone; this
+                // cannot -- it must stay O(velocity) or the projection is
+                // injecting momentum rather than removing divergence.
+                for (int j = 0; j < VAM_N_CORR; ++j) {
+                    const Real d = upd[j] - q8[VAM_CORR_IDX[j]];
+                    const PetscReal ad = PetscAbsReal(PetscRealPart(d));
+                    if (ad > corr_max) corr_max = ad;
+                    q8[VAM_CORR_IDX[j]] = upd[j];
+                }
             }
         }
         PetscCall(VecRestoreArrayRead(Pv, &pp)); PetscCall(VecRestoreArrayRead(CA, &ca)); PetscCall(VecRestoreArray(X, &x));
+        // REQ-172 (@amrex): print the PHYSICAL correction here, not in [DIAG] --
+        // [DIAG] lives in PressureSolve(), which runs BEFORE the corrector, so it
+        // could only ever print corr=0. This is the (dt/rho)grad-P momentum
+        // change; it must stay O(velocity).
+        if (getenv("ZOOMY_VAM_DIAG") && rank == 0) {
+            PetscReal g; MPI_Allreduce(&corr_max, &g, 1, MPIU_REAL, MPI_MAX, PETSC_COMM_WORLD);
+            std::cout << "[CORR] dt=" << dt_chorin << "  max|(dt/rho)gradP|=" << g << std::endl;
+        }
         PetscFunctionReturn(PETSC_SUCCESS);
     }
 };
