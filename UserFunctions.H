@@ -133,6 +133,43 @@ inline double eigensystem(I idx_, Ts... a_flat_args) {
     return cache_out[idx];
 }
 
+// ── eigenvalues ──────────────────────────────────────────────────────────
+// The λ-only companion of `eigensystem` (core kernel_functions.eigenvalues):
+// idx-th eigenvalue (real part) of the row-major n*n A_flat, n = sqrt(M).
+// `local_max_abs_eigenvalue` needs only max|λ| for the CFL bound, so this skips
+// the eigenvector solve AND the R⁻¹ that `eigensystem` computes — ~2/3 less work
+// per face per step, and it drops the inverse, which is the part that can fail
+// near wet/dry (a degenerate spectrum makes V singular). This is the kernel
+// dmplex/jax/amrex each asked core for from a different angle (REQ-168 GAP 1).
+//
+// Unlike `eigensystem`, the 1-slot cache here is a pure OPTIMISATION, not a
+// correctness requirement: the printer emits the n component reads of one face
+// with an identical A, and max|λ| is invariant to eigenpair ORDER, so even a
+// per-call re-decomposition with a different order would give the same answer.
+// (For `eigensystem` the shared basis IS correctness — R, |Λ| and L must agree.)
+template <typename I, typename... Ts>
+inline double eigenvalues(I idx_, Ts... a_flat_args) {
+    const int idx = static_cast<int>(idx_);
+    const double a_flat[] = { static_cast<double>(a_flat_args)... };
+    constexpr int M = sizeof...(a_flat_args);
+    const int n = static_cast<int>(std::lround(std::sqrt(double(M))));
+
+    static thread_local std::vector<double> cache_key, cache_out;
+    bool hit = (static_cast<int>(cache_key.size()) == M);
+    for (int k = 0; hit && k < M; ++k) hit = (cache_key[k] == a_flat[k]);
+
+    if (!hit) {
+        Eigen::MatrixXd A(n, n);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) A(i, j) = a_flat[i * n + j];
+        Eigen::EigenSolver<Eigen::MatrixXd> es(A, /*computeEigenvectors=*/false);
+        const Eigen::VectorXd w = es.eigenvalues().real();
+        cache_out.assign(w.data(), w.data() + n);
+        cache_key.assign(a_flat, a_flat + M);
+    }
+    return cache_out[idx];
+}
+
 // ── solve ────────────────────────────────────────────────────────────────
 // The idx-th component of the PER-CELL dense linear solve A^-1 b, emitted by
 // the NSM's point-implicit source linearization (`source_treatment='linearized'`:

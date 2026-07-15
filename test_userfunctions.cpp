@@ -45,6 +45,24 @@ int main() {
     }
     printf("|A| = [[%.4f, %.4f], [%.4f, %.4f]]\n", absA[0], absA[1], absA[2], absA[3]);
 
+    // ---- eigenvalues: the lambda-only kernel must agree with eigensystem's lambda
+    double ev[2];
+    for (int i = 0; i < 2; ++i) ev[i] = eigenvalues(i, a[0], a[1], a[2], a[3]);
+    printf("eigenvalues     = %.6f %.6f   (expect -1, 5)\n", ev[0], ev[1]);
+    double evlo = std::min(ev[0], ev[1]), evhi = std::max(ev[0], ev[1]);
+    if (std::fabs(evlo - (u - c)) > 1e-10 || std::fabs(evhi - (u + c)) > 1e-10) { printf("  FAIL eigenvalues\n"); fail++; }
+    // must match eigensystem's spectrum as a SET (order is not guaranteed)
+    if (std::fabs(evlo - lo) > 1e-10 || std::fabs(evhi - hi) > 1e-10) { printf("  FAIL eigenvalues != eigensystem spectrum\n"); fail++; }
+    // max|lambda| is what local_max_abs_eigenvalue actually consumes
+    double mx = std::max(std::fabs(ev[0]), std::fabs(ev[1]));
+    printf("max|lambda|     = %.6f   (expect 5 = |u|+c)\n", mx);
+    if (std::fabs(mx - 5.0) > 1e-10) { printf("  FAIL max|lambda|\n"); fail++; }
+    // cache invalidation on a different matrix
+    double e2 = eigenvalues(0, 2.0, 0.0, 0.0, 3.0);
+    double e3 = eigenvalues(1, 2.0, 0.0, 0.0, 3.0);
+    printf("eigenvalues(diag(2,3)) = %.6f %.6f   (expect 2, 3 -> cache invalidates)\n", e2, e3);
+    if (std::fabs(std::min(e2,e3) - 2.0) > 1e-10 || std::fabs(std::max(e2,e3) - 3.0) > 1e-10) { printf("  FAIL eigenvalues cache\n"); fail++; }
+
     // ---- solve: A x = b, n=3, known answer
     //   A = [[2,1,0],[1,3,1],[0,1,4]], b = [3,9,13] -> x = [1,1,3]
     double x0 = solve(0, 2.,1.,0., 1.,3.,1., 0.,1.,4., 3.,7.,13.);

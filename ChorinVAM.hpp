@@ -1,9 +1,41 @@
 #ifndef CHORIN_VAM_HPP
 #define CHORIN_VAM_HPP
 
-#include "MUSCLSolver.hpp"
-#include "ChorinOps.H"
+#include "MUSCLSolver.hpp"      // pulls Model.H -> defines ZOOMY_MODEL_IS_VAM iff VAM
 #include <petscksp.h>
+
+// ─────────────────────────────────────────────────────────────────────────
+// REQ-169 (speed): main.cpp includes this header unconditionally and does
+// `std::make_unique<ChorinVAMSolver>()`, so the class must be COMPLETE in every
+// build. ChorinVAMSolver is not a template, so a static_assert in its body is
+// evaluated at PARSE — with a non-VAM Model.H (e.g. SWE, n_dof_q=4) against the
+// checked-in VAM ChorinOps.H (VAM_NS=8) it fired and the whole tree stopped
+// compiling. The assert is right (it catches mismatched generated headers
+// reading wrong slots); it just must not fire for a model that never uses it.
+//
+// So the real body compiles only for a VAM tree. The selector is emitted BY
+// create_vam_model.py INTO Model.H — the same generated file that defines
+// n_dof_q — so it is rewritten whenever n_dof_q is and cannot go stale against
+// it. (A -D build flag would be a second source of truth that can disagree with
+// the headers in either direction: set for an SWE tree -> the assert fires
+// again; forgotten for a VAM tree -> the stub silently replaces the solver.)
+// ─────────────────────────────────────────────────────────────────────────
+#if !defined(ZOOMY_MODEL_IS_VAM)
+
+class ChorinVAMSolver : public MUSCLSolver {
+public:
+    PetscErrorCode Run(int, char **) override {
+        PetscFunctionBeginUser;
+        SETERRQ(PETSC_COMM_WORLD, PETSC_ERR_SUP,
+                "solver.method=\"chorin\" but this binary was generated for a "
+                "non-VAM model (Model.H carries no ZOOMY_MODEL_IS_VAM). Re-run "
+                "create_vam_model.py --dimension {2|3} and rebuild "
+                "(make clean_all && make CPU).");
+    }
+};
+
+#else   // ── VAM tree: the real solver ─────────────────────────────────────
+#include "ChorinOps.H"
 
 // ─────────────────────────────────────────────────────────────────────────
 // VAM Chorin pressure-split solver (hyperbolic-elliptic).
@@ -288,5 +320,7 @@ private:
         PetscFunctionReturn(PETSC_SUCCESS);
     }
 };
+
+#endif // ZOOMY_MODEL_IS_VAM
 
 #endif // CHORIN_VAM_HPP
