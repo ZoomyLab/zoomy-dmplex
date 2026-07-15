@@ -343,6 +343,19 @@ private:
                 std::cout << "[Pmat] asymmetry ||A - A^T||_F / ||A||_F = "
                           << (nA > 0 ? nAsym / nA : nAsym)
                           << "   (||A||_F = " << nA << ")" << std::endl;
+            // Dump for offline analysis: @jax measured TWO things this norm
+            // cannot show -- whether the SYMMETRIC part is INDEFINITE (worse for
+            // multigrid than skewness: MG coarse-grid correction assumes a
+            // definite operator) and the NON-NORMALITY. Cross-checking both on
+            // dmplex needs the actual matrix, so write it once.
+            if (getenv("ZOOMY_VAM_DUMP_PMAT")) {
+                PetscViewer vw;
+                PetscCall(PetscViewerBinaryOpen(PETSC_COMM_WORLD, "pmat.bin",
+                                                FILE_MODE_WRITE, &vw));
+                PetscCall(MatView(Pmat, vw));
+                PetscCall(PetscViewerDestroy(&vw));
+                if (rank == 0) std::cout << "[Pmat] wrote pmat.bin" << std::endl;
+            }
         }
 
         PetscReal nt, nd, nl;
