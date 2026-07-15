@@ -1,13 +1,13 @@
 {
-  "name": "VAM_escalante_bump_2d",
+  "name": "VAM_escalante_bump_1d",
   "io": {
-    "directory": "outputs/vam_bump_2d",
-    "filename": "vam_bump_2d",
+    "directory": "outputs/arb_schurr",
+    "filename": "arb_schurr",
     "snapshots": 40,
     "snapshot_logic": "interpolate",
     "clean_directory": true,
-    "mesh_path": "./bump_2d.msh",
-    "initial_condition_file": "./bump_ic_2d.h5",
+    "mesh_path": "./bump_1d.msh",
+    "initial_condition_file": "./bump_ic.h5",
     "initial_condition_mask": [
       0,
       1
@@ -17,7 +17,7 @@
   "solver": {
     "t_end": 0.05,
     "cfl": 0.3,
-    "dt": 0.002653638832620528,
+    "dt": 0.001326819416310264,
     "reconstruction_order": 0,
     "method": "chorin",
     "time_integration": "splitting",

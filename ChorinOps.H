@@ -69,6 +69,59 @@ static constexpr VamAuxSpec VAM_CA[VAM_NCA] = {
     {5, 1, -1, false},   // CA[19] = q_y_1_y
 };
 
+// ── analytic pressure blocks (REQ-172) ───────────────────────────────────
+// source_k = sum_l [ A0_kl*P_l + Ad_kl*(d^|a| P_l / da) ... ] + RHS_k, i.e. the
+// SAME operator vam_pressure_residual applies matrix-free -- but exposed
+// block-by-block so the solver can ASSEMBLE a sparse Pmat for a preconditioner.
+// Each fills an NP*NP row-major block for ONE cell from that cell's frozen
+// state. VAM_PBLOCKS lists which derivative each block multiplies; the solver
+// combines them with its own Green-Gauss stencil weights.
+//
+// ⚠ THE PMAT MUST BE BLOCK-AWARE (blocksize = VAM_NP). @amrex's Local Fourier
+// Analysis (REQ-172) measured rho(D^-1 M) = 3.9 modal / 1.8 nodal, BOTH > 1:
+// this block is coupling-dominated, not diagonally dominated, so any point /
+// per-mode preconditioner is GUARANTEED to diverge -- they measured point-Jacobi
+// and per-mode multigrid both diverging, and only point-BLOCK-Jacobi (invert the
+// full NP*NP mode block per cell) converging. So a SCALAR PCGAMG on this matrix
+// reproduces their diverging per-mode MG. MatSetBlockSize(Pmat, VAM_NP) makes
+// GAMG aggregate mode-blocks and smooth block-wise = their point-block-Jacobi as
+// the MG smoother, which is the one combination that both converges and can be
+// mesh-independent.
+struct VamPBlockSpec { int ax1; int ax2; };   // ax=-1 => the undifferentiated A0 term
+static constexpr int VAM_N_PBLOCK = 5;
+static constexpr VamPBlockSpec VAM_PBLOCKS[VAM_N_PBLOCK] = {
+    {-1, -1},   // block 0 = A0  (undifferentiated: multiplies P itself)
+    {0, -1},   // block 1 = Ax
+    {1, -1},   // block 2 = Ay
+    {0, 0},   // block 3 = Axx
+    {1, 1},   // block 4 = Ayy
+};
+
+template <typename T>
+PORTABLE_FN inline void vam_pressure_blocks(const T* Q, const T* Qaux, const T* p, T dt, T* out) {
+    // out[(blk*VAM_NP + k)*VAM_NP + l] = block `blk`, row k, col l
+    out[0] = 2*Qaux[11]*dt/p[1] + 2*Qaux[9]*dt/p[1] + 4*Qaux[10]*Qaux[14]*dt/(Q[1]*p[1]) + 2*pow(Qaux[12], 2)*dt/(Q[1]*p[1]) + 4*Qaux[12]*Qaux[8]*dt/(Q[1]*p[1]) + 2*pow(Qaux[14], 2)*dt/(Q[1]*p[1]);   // A0[0][0]
+    out[1] = 4*Qaux[11]*dt/p[1] + (2.0/3.0)*Qaux[13]*dt/p[1] + (2.0/3.0)*Qaux[15]*dt/p[1] + 4*Qaux[9]*dt/p[1] - 4*pow(Qaux[10], 2)*dt/(Q[1]*p[1]) + (2.0/3.0)*pow(Qaux[12], 2)*dt/(Q[1]*p[1]) + (2.0/3.0)*pow(Qaux[14], 2)*dt/(Q[1]*p[1]) - 4*pow(Qaux[8], 2)*dt/(Q[1]*p[1]) - 4*dt/(Q[1]*p[1]);   // A0[0][1]
+    out[2] = -Qaux[13]*dt/p[1] - Qaux[15]*dt/p[1] + 12*pow(Qaux[10], 2)*dt/(Q[1]*p[1]) + 12*Qaux[10]*Qaux[14]*dt/(Q[1]*p[1]) + 4*pow(Qaux[12], 2)*dt/(Q[1]*p[1]) + 12*Qaux[12]*Qaux[8]*dt/(Q[1]*p[1]) + 4*pow(Qaux[14], 2)*dt/(Q[1]*p[1]) + 12*pow(Qaux[8], 2)*dt/(Q[1]*p[1]) + 12*dt/(Q[1]*p[1]);   // A0[1][0]
+    out[3] = 2*Qaux[11]*dt/p[1] + 2*Qaux[9]*dt/p[1] + 12*pow(Qaux[10], 2)*dt/(Q[1]*p[1]) + 8*Qaux[10]*Qaux[14]*dt/(Q[1]*p[1]) + 2*pow(Qaux[12], 2)*dt/(Q[1]*p[1]) + 8*Qaux[12]*Qaux[8]*dt/(Q[1]*p[1]) + 2*pow(Qaux[14], 2)*dt/(Q[1]*p[1]) + 12*pow(Qaux[8], 2)*dt/(Q[1]*p[1]) + 12*dt/(Q[1]*p[1]);   // A0[1][1]
+    out[4] = 4*Qaux[8]*dt/p[1];   // Ax[0][0]
+    out[5] = (4.0/3.0)*Qaux[12]*dt/p[1] + 4*Qaux[8]*dt/p[1];   // Ax[0][1]
+    out[6] = -Qaux[12]*dt/p[1];   // Ax[1][0]
+    out[7] = Qaux[12]*dt/p[1] + 4*Qaux[8]*dt/p[1];   // Ax[1][1]
+    out[8] = 4*Qaux[10]*dt/p[1];   // Ay[0][0]
+    out[9] = 4*Qaux[10]*dt/p[1] + (4.0/3.0)*Qaux[14]*dt/p[1];   // Ay[0][1]
+    out[10] = -Qaux[14]*dt/p[1];   // Ay[1][0]
+    out[11] = 4*Qaux[10]*dt/p[1] + Qaux[14]*dt/p[1];   // Ay[1][1]
+    out[12] = -Q[1]*dt/p[1];   // Axx[0][0]
+    out[13] = (1.0/3.0)*Q[1]*dt/p[1];   // Axx[0][1]
+    out[14] = -Q[1]*dt/p[1];   // Axx[1][0]
+    out[15] = 0;   // Axx[1][1]
+    out[16] = -Q[1]*dt/p[1];   // Ayy[0][0]
+    out[17] = (1.0/3.0)*Q[1]*dt/p[1];   // Ayy[0][1]
+    out[18] = -Q[1]*dt/p[1];   // Ayy[1][0]
+    out[19] = 0;   // Ayy[1][1]
+}
+
 template <typename T>
 PORTABLE_FN inline void vam_pressure_residual(const T* Q, const T* Qaux, const T* p, T dt, T* out) {
     out[0] = -Q[1]*Qaux[1]*dt/p[1] - Q[1]*Qaux[3]*dt/p[1] + (1.0/3.0)*Q[1]*Qaux[5]*dt/p[1] + (1.0/3.0)*Q[1]*Qaux[7]*dt/p[1] + 2*Q[8]*Qaux[11]*dt/p[1] + 2*Q[8]*Qaux[9]*dt/p[1] + 4*Q[9]*Qaux[11]*dt/p[1] + (2.0/3.0)*Q[9]*Qaux[13]*dt/p[1] + (2.0/3.0)*Q[9]*Qaux[15]*dt/p[1] + 4*Q[9]*Qaux[9]*dt/p[1] + 4*Qaux[0]*Qaux[8]*dt/p[1] + 4*Qaux[10]*Qaux[2]*dt/p[1] + 4*Qaux[10]*Qaux[6]*dt/p[1] + (4.0/3.0)*Qaux[12]*Qaux[4]*dt/p[1] + (4.0/3.0)*Qaux[14]*Qaux[6]*dt/p[1] + Qaux[16] - 1.0/3.0*Qaux[17] + Qaux[18] - 1.0/3.0*Qaux[19] + 4*Qaux[4]*Qaux[8]*dt/p[1] - Q[2]*Qaux[12]/Q[1] - 2*Q[2]*Qaux[8]/Q[1] - 1.0/3.0*Q[3]*Qaux[12]/Q[1] - 2*Q[4]*Qaux[10]/Q[1] - Q[4]*Qaux[14]/Q[1] - 1.0/3.0*Q[5]*Qaux[14]/Q[1] + 2*Q[6]/Q[1] + 4*Q[8]*Qaux[10]*Qaux[14]*dt/(Q[1]*p[1]) + 2*Q[8]*pow(Qaux[12], 2)*dt/(Q[1]*p[1]) + 4*Q[8]*Qaux[12]*Qaux[8]*dt/(Q[1]*p[1]) + 2*Q[8]*pow(Qaux[14], 2)*dt/(Q[1]*p[1]) - 4*Q[9]*pow(Qaux[10], 2)*dt/(Q[1]*p[1]) + (2.0/3.0)*Q[9]*pow(Qaux[12], 2)*dt/(Q[1]*p[1]) + (2.0/3.0)*Q[9]*pow(Qaux[14], 2)*dt/(Q[1]*p[1]) - 4*Q[9]*pow(Qaux[8], 2)*dt/(Q[1]*p[1]) - 4*Q[9]*dt/(Q[1]*p[1]);

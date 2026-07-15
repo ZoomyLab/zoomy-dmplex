@@ -15,9 +15,9 @@
     "write_3d": false
   },
   "solver": {
-    "t_end": 20.0,
+    "t_end": 0.002,
     "cfl": 0.3,
-    "dt": 0.005307277665241056,
+    "dt": 0.000331704854077566,
     "reconstruction_order": 0,
     "method": "chorin",
     "time_integration": "splitting",

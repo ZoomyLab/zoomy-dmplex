@@ -1035,14 +1035,14 @@ struct Model {
         const T dt,
         const ZoomyMesh& mesh)
     {
-    // Qaux[0] (b_x) = D^(1, 0) Q[0]
-    compute_derivative(Qaux[0], Q[0], 1, 0, 0, mesh);
     // Qaux[1] (b_y) = D^(0, 1) Q[0]
     compute_derivative(Qaux[1], Q[0], 0, 1, 0, mesh);
-    // Qaux[2] (q_y_1_y) = D^(0, 1) Q[5]
-    compute_derivative(Qaux[2], Q[5], 0, 1, 0, mesh);
+    // Qaux[0] (b_x) = D^(1, 0) Q[0]
+    compute_derivative(Qaux[0], Q[0], 1, 0, 0, mesh);
     // Qaux[3] (q_x_1_x) = D^(1, 0) Q[3]
     compute_derivative(Qaux[3], Q[3], 1, 0, 0, mesh);
+    // Qaux[2] (q_y_1_y) = D^(0, 1) Q[5]
+    compute_derivative(Qaux[2], Q[5], 0, 1, 0, mesh);
     }
 
     // initial_condition: NOT emitted from the SystemModel (provide solver-side).
