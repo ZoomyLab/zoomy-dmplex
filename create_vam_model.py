@@ -39,7 +39,7 @@ import sympy as sp
 from zoomy_core.misc.misc import ZArray
 from zoomy_core.model.models.vam import VAM
 from zoomy_core.model.models.closures import Newtonian, StressFree
-from zoomy_core.model.boundary_conditions import Dirichlet
+from zoomy_core.model.boundary_conditions import Dirichlet, Extrapolation
 from zoomy_core.model.initial_conditions import Constant
 from zoomy_core.systemmodel import SystemModel
 from zoomy_core.numerics import ReconstructionSpec
@@ -63,14 +63,26 @@ def build_bcs(dimension, inflow=True, pin_pressure=True, rotate=False):
 
     `rotate` swaps the streamwise axis x->y for deliverable 3 (the 90°-rotated
     2-D run that tests x/y flux independence): inflow moves to `bottom`, the
-    pressure pin to `top`, and q_y carries the discharge instead of q_x.
+    pressure pin to `top`, and q_y carries the discharge instead of q_x. The
+    setup is then symmetric under the 90° rotation, so the two runs must agree
+    up to the axis swap — that IS the test.
+
+    In 2-D the CROSS-STREAM boundaries get an explicit whole-state Extrapolation
+    (zero-Neumann). Two reasons this is required, not cosmetic:
+      * the solution is uniform across the strip, so d/dn = 0 is EXACT there —
+        it imposes nothing the extruded solution does not already satisfy;
+      * every tagged face MUST resolve to a model BC. TransportStep does
+        `boundary_map.at(tag_id)`, which THROWS on a tag with no BC, and a
+        missing BC otherwise shows up as a step-0 nan out of the predictor.
     """
     if dimension == 2:
         stream, cross = "q", None           # 1-D horizontal: a single q family
         inlet, outlet = "left", "right"
+        cross_bnds = ()                     # 1-D: no cross-stream boundary
     else:
         stream, cross = ("q_y", "q_x") if rotate else ("q_x", "q_y")
         inlet, outlet = ("bottom", "top") if rotate else ("left", "right")
+        cross_bnds = ("left", "right") if rotate else ("bottom", "top")
 
     bcs = []
     if inflow:
@@ -84,6 +96,7 @@ def build_bcs(dimension, inflow=True, pin_pressure=True, rotate=False):
     if pin_pressure:
         bcs += [Dirichlet(outlet, on="P_0", value=0.0),
                 Dirichlet(outlet, on="P_1", value=0.0)]
+    bcs += [Extrapolation(t) for t in cross_bnds]   # on="all" -> whole state
     return bcs
 
 

@@ -74,7 +74,57 @@ def write_msh_1d(path, domain=DOMAIN, ncells=NCELLS):
     return x
 
 
-def write_ic(path, mesh_path, nstate):
+def write_msh_2d(path, ncells=NCELLS, ncross=4, width=0.2, rotate=False):
+    """MSH 2.2 2-D structured QUAD strip: the 1-D bump extruded across.
+
+    VAM(1, dimension=3) lowers to `Model.H dimension = 2`, so boundary_dim = 1
+    and the tags must be PHYSICAL LINES (contrast the 1-D case, where
+    boundary_dim = 0 and they are physical points).
+
+    `rotate=False`: streamwise x in DOMAIN (ncells), cross-stream y in (0,width)
+                    (ncross). Bump varies in x; inflow on `left`.
+    `rotate=True` : the exact 90° rotation — streamwise y in DOMAIN, cross x.
+                    Bump varies in y; inflow on `bottom`.
+    Deliverables 2 vs 3 must agree under the axis swap; that is the whole test,
+    so the two meshes are each other's transpose by construction.
+
+    Element types: 1 = 2-node line (boundaries), 3 = 4-node quad (cells).
+    """
+    s = np.linspace(DOMAIN[0], DOMAIN[1], ncells + 1)     # streamwise nodes
+    c = np.linspace(0.0, width, ncross + 1)               # cross-stream nodes
+    # (i along streamwise, j across) -> physical (x, y)
+    X, Y = (c, s) if rotate else (s, c)
+    ni, nj = len(X), len(Y)
+    nid = lambda i, j: j * ni + i + 1                     # 1-based, x-fastest
+
+    lines = ["$MeshFormat", "2.2 0 8", "$EndMeshFormat",
+             "$PhysicalNames", "5",
+             '1 1 "left"', '1 2 "right"', '1 3 "bottom"', '1 4 "top"',
+             '2 5 "domain"',
+             "$EndPhysicalNames", "$Nodes", str(ni * nj)]
+    for j in range(nj):
+        for i in range(ni):
+            lines.append(f"{nid(i,j)} {X[i]:.16e} {Y[j]:.16e} 0.0")
+    lines.append("$EndNodes")
+
+    elems, eid = [], 1
+    for j in range(nj - 1):                               # left / right (x=const)
+        elems.append(f"{eid} 1 2 1 1 {nid(0,j)} {nid(0,j+1)}"); eid += 1
+        elems.append(f"{eid} 1 2 2 2 {nid(ni-1,j)} {nid(ni-1,j+1)}"); eid += 1
+    for i in range(ni - 1):                               # bottom / top (y=const)
+        elems.append(f"{eid} 1 2 3 3 {nid(i,0)} {nid(i+1,0)}"); eid += 1
+        elems.append(f"{eid} 1 2 4 4 {nid(i,nj-1)} {nid(i+1,nj-1)}"); eid += 1
+    for j in range(nj - 1):                               # quads
+        for i in range(ni - 1):
+            elems.append(f"{eid} 3 2 5 1 {nid(i,j)} {nid(i+1,j)} "
+                         f"{nid(i+1,j+1)} {nid(i,j+1)}"); eid += 1
+    lines.append("$Elements"); lines.append(str(len(elems)))
+    lines.extend(elems); lines.append("$EndElements")
+    path.write_text("\n".join(lines) + "\n")
+    return (ni - 1) * (nj - 1)
+
+
+def write_ic(path, mesh_path, nstate, rotate=False):
     """Write the PETSc-ordered `state` Vec: flat, cell-major, block size nstate
        [Cell0_Var0, Cell0_Var1, ..., CellN_VarM]  (IOManager::LoadSolution)
     with, per run_derived.py:
@@ -94,7 +144,9 @@ def write_ic(path, mesh_path, nstate):
 
     dm = PETSc.DMPlex().createFromFile(str(mesh_path))
     cS, cE = dm.getHeightStratum(0)          # cells
-    xc = np.array([dm.computeCellGeometryFVM(c)[1][0] for c in range(cS, cE)])
+    cent = np.array([dm.computeCellGeometryFVM(c)[1] for c in range(cS, cE)])
+    # the bump/dam vary along the STREAMWISE axis only (axis 1 = y when rotated)
+    xc = cent[:, 1] if rotate else cent[:, 0]
     b = BUMP(xc)
     h = np.maximum(np.where(xc < DAM_X, H_RES - b, H_DRY), H_DRY)
 
@@ -108,15 +160,15 @@ def write_ic(path, mesh_path, nstate):
     return xc, b, h
 
 
-def write_settings(path, mesh, ic, t_end=T_END, cfl=0.3):
+def write_settings(path, mesh, ic, t_end=T_END, cfl=0.3, name="VAM_escalante_bump_1d", outdir="vam_bump_1d"):
     # dt matches run_derived.py: cfl * dx / (sqrt(g*H_RES) + 1.0)
     dx = (DOMAIN[1] - DOMAIN[0]) / NCELLS
     dt = cfl * dx / (np.sqrt(G * H_RES) + 1.0)
     cfg = {
-        "name": "VAM_escalante_bump_1d",
+        "name": name,
         "io": {
-            "directory": "outputs/vam_bump_1d",
-            "filename": "vam_bump_1d",
+            "directory": f"outputs/{outdir}",
+            "filename": outdir,
             "snapshots": 40,
             "snapshot_logic": "interpolate",
             "clean_directory": True,
@@ -148,15 +200,37 @@ if __name__ == "__main__":
     ap.add_argument("--nstate", type=int, default=6,
                     help="Model<T>::n_dof_q of the generated predictor "
                          "(dim=2 -> 6: [b,h,q_0,q_1,r_0,r_1]; dim=3 -> 8)")
+    ap.add_argument("--dim", type=int, default=1, choices=(1, 2),
+                    help="MESH dimension: 1 = the 1-D bump (VAM dimension=2, "
+                         "deliverable 1); 2 = the extruded strip (VAM "
+                         "dimension=3, deliverables 2/3)")
+    ap.add_argument("--rotate", action="store_true",
+                    help="2-D only: the 90°-rotated setup (streamwise y) — "
+                         "deliverable 3. Must match create_vam_model.py --rotate")
+    ap.add_argument("--ncross", type=int, default=4, help="2-D: cells across the strip")
+    ap.add_argument("--width", type=float, default=0.2, help="2-D: strip width")
     a = ap.parse_args()
     NCELLS = a.ncells
-    mesh = HERE / "bump_1d.msh"
-    ic = HERE / "bump_ic.h5"
-    cfg = HERE / "settings_bump.json"
-    xn = write_msh_1d(mesh, ncells=a.ncells)
-    xc, b, h = write_ic(ic, mesh, a.nstate)
-    dt = write_settings(cfg, mesh, ic, t_end=a.t_end, cfl=a.cfl)
-    print(f"mesh {mesh.name}: {a.ncells} cells, x in {DOMAIN}, tags left/right (dim 0)")
-    print(f"ic   {ic.name}: b in [{b.min():.4f},{b.max():.4f}]  h in [{h.min():.4f},{h.max():.4f}]")
+
+    if a.dim == 1:
+        mesh, ic, cfg = HERE / "bump_1d.msh", HERE / "bump_ic.h5", HERE / "settings_bump.json"
+        write_msh_1d(mesh, ncells=a.ncells)
+        ncell = a.ncells
+        tags = "left/right (physical POINTS, dim 0)"
+        name, outdir = "VAM_escalante_bump_1d", "vam_bump_1d"
+    else:
+        suff = "2d_rot" if a.rotate else "2d"
+        mesh = HERE / f"bump_{suff}.msh"; ic = HERE / f"bump_ic_{suff}.h5"
+        cfg = HERE / f"settings_bump_{suff}.json"
+        ncell = write_msh_2d(mesh, ncells=a.ncells, ncross=a.ncross,
+                             width=a.width, rotate=a.rotate)
+        tags = "left/right/bottom/top (physical LINES, dim 1)"
+        name = f"VAM_escalante_bump_{suff}"; outdir = f"vam_bump_{suff}"
+
+    xc, b, h = write_ic(ic, mesh, a.nstate, rotate=(a.dim == 2 and a.rotate))
+    dt = write_settings(cfg, mesh, ic, t_end=a.t_end, cfl=a.cfl, name=name, outdir=outdir)
+    ax = "y" if (a.dim == 2 and a.rotate) else "x"
+    print(f"mesh {mesh.name}: {ncell} cells, streamwise {ax} in {DOMAIN}, tags {tags}")
+    print(f"ic   {ic.name}: nstate={a.nstate}  b in [{b.min():.4f},{b.max():.4f}]  h in [{h.min():.4f},{h.max():.4f}]")
     print(f"     eta = b+h in [{(b+h).min():.4f},{(b+h).max():.4f}]  (reservoir {H_RES})")
     print(f"cfg  {cfg.name}: t_end={a.t_end}, cfl={a.cfl}, dt={dt:.5f}, ~{int(a.t_end/dt)} steps")
