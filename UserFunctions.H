@@ -2,8 +2,33 @@
 #include <cmath>
 #include <vector>
 #include <algorithm>
+#include <limits>
 #include <Eigen/Dense>
 #include <petscdmplex.h>
+
+// ── REQ-168 SPEC ADDENDUM (speed, 2026-07-15) ────────────────────────────
+// (1) The eig kernels MUST be inf-tolerant: at order 2 the a-posteriori MOOD
+//     path evaluates the wave speed on NOT-YET-CORRECTED candidate states,
+//     which are non-finite at a dry front BY DESIGN. Contract: report +inf for
+//     a non-finite face — an infinite wave speed is exactly right for a garbage
+//     candidate (dt clamps, MOOD flags and drops the cell to order 1).
+//
+//     ⚠ dmplex needs this MORE than numpy does, and for the OPPOSITE reason.
+//     numpy/LAPACK RAISE on non-finite input ("LinAlgError: Array must not
+//     contain infs") — loud. MEASURED here: Eigen does NOT raise and does NOT
+//     hang; EigenSolver::info() returns NoConvergence and the eigenvalues are
+//     left GARBAGE. Unguarded, dmplex would SILENTLY consume a wrong wave speed
+//     exactly where numpy crashes. So both kernels below pre-check their inputs
+//     AND check info() (which also catches genuine non-convergence on finite
+//     input). Never trust an unchecked Eigen decomposition.
+//
+// (2) The wave-speed path must NEVER invert the eigenbasis (a dry-cell Jacobian
+//     is defective, so inv(V) fails even when the eigenvalues are fine).
+//     dmplex satisfies this BY CONSTRUCTION: `eigenvalues` is a SEPARATE kernel
+//     that never forms R or L. Only `eigensystem` — which just Roe requests —
+//     inverts, and may legitimately fail on a defective matrix. dmplex needs no
+//     lazy idx<n split; the split is the two kernels.
+#define ZOOMY_EIG_INF (std::numeric_limits<double>::infinity())
 
 // Backend implementations of the opaque placeholder kernels the zoomy_core C++
 // printer emits (REQ-38/REQ-65). The generated Model.H calls these by bare name,
@@ -111,23 +136,41 @@ inline double eigensystem(I idx_, Ts... a_flat_args) {
     for (int k = 0; hit && k < M; ++k) hit = (cache_key[k] == a_flat[k]);
 
     if (!hit) {
+        // REQ-168 addendum (1): non-finite candidate (MOOD, by design) or a
+        // decomposition Eigen could not converge -> lambda = +inf, R = L = I.
+        // Identity (not zero) for R/L so a Roe |A| = R|Lambda|L collapses to
+        // inf*I -- an infinite dissipation the dt clamp / MOOD flag can act on
+        // -- rather than 0*inf = NaN, which would poison the whole flux row.
+        bool finite = true;
+        for (int k = 0; k < M && finite; ++k) finite = std::isfinite(a_flat[k]);
         Eigen::MatrixXd A(n, n);
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j < n; ++j) A(i, j) = a_flat[i * n + j];
-        Eigen::EigenSolver<Eigen::MatrixXd> es(A);
-        const Eigen::VectorXd w = es.eigenvalues().real();
-        const Eigen::MatrixXd V = es.eigenvectors().real();     // cols = eigvecs
-        Eigen::MatrixXd L;
-        Eigen::FullPivLU<Eigen::MatrixXd> lu(V);
-        if (lu.isInvertible()) L = lu.inverse();
-        else                   L = V.completeOrthogonalDecomposition().pseudoInverse();
+        if (finite)
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) A(i, j) = a_flat[i * n + j];
+        Eigen::EigenSolver<Eigen::MatrixXd> es;
+        if (finite) es.compute(A);
+        const bool ok = finite && (es.info() == Eigen::Success);
 
         cache_out.assign(n + 2 * n * n, 0.0);
-        for (int i = 0; i < n; ++i) cache_out[i] = w(i);
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j < n; ++j) cache_out[n + i * n + j] = V(i, j);
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j < n; ++j) cache_out[n + n * n + i * n + j] = L(i, j);
+        if (!ok) {
+            for (int i = 0; i < n; ++i) cache_out[i] = ZOOMY_EIG_INF;
+            for (int i = 0; i < n; ++i) {
+                cache_out[n + i * n + i] = 1.0;                  // R = I
+                cache_out[n + n * n + i * n + i] = 1.0;          // L = I
+            }
+        } else {
+            const Eigen::VectorXd w = es.eigenvalues().real();
+            const Eigen::MatrixXd V = es.eigenvectors().real();  // cols = eigvecs
+            Eigen::MatrixXd L;
+            Eigen::FullPivLU<Eigen::MatrixXd> lu(V);
+            if (lu.isInvertible()) L = lu.inverse();
+            else                   L = V.completeOrthogonalDecomposition().pseudoInverse();
+            for (int i = 0; i < n; ++i) cache_out[i] = w(i);
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) cache_out[n + i * n + j] = V(i, j);
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) cache_out[n + n * n + i * n + j] = L(i, j);
+        }
         cache_key.assign(a_flat, a_flat + M);
     }
     return cache_out[idx];
@@ -159,12 +202,25 @@ inline double eigenvalues(I idx_, Ts... a_flat_args) {
     for (int k = 0; hit && k < M; ++k) hit = (cache_key[k] == a_flat[k]);
 
     if (!hit) {
+        // REQ-168 addendum (1): MOOD evaluates the wave speed on uncorrected
+        // candidates that are non-finite at a dry front BY DESIGN. Report +inf
+        // (dt clamps, MOOD flags). Eigen returns NoConvergence + GARBAGE rather
+        // than raising, so info() must be checked or the garbage is consumed
+        // silently — see the header note.
+        bool finite = true;
+        for (int k = 0; k < M && finite; ++k) finite = std::isfinite(a_flat[k]);
         Eigen::MatrixXd A(n, n);
-        for (int i = 0; i < n; ++i)
-            for (int j = 0; j < n; ++j) A(i, j) = a_flat[i * n + j];
-        Eigen::EigenSolver<Eigen::MatrixXd> es(A, /*computeEigenvectors=*/false);
-        const Eigen::VectorXd w = es.eigenvalues().real();
-        cache_out.assign(w.data(), w.data() + n);
+        if (finite)
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j < n; ++j) A(i, j) = a_flat[i * n + j];
+        Eigen::EigenSolver<Eigen::MatrixXd> es;
+        if (finite) es.compute(A, /*computeEigenvectors=*/false);
+
+        cache_out.assign(n, ZOOMY_EIG_INF);
+        if (finite && es.info() == Eigen::Success) {
+            const Eigen::VectorXd w = es.eigenvalues().real();
+            cache_out.assign(w.data(), w.data() + n);
+        }
         cache_key.assign(a_flat, a_flat + M);
     }
     return cache_out[idx];

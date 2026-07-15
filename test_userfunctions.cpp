@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cmath>
+#include <limits>
 #include "UserFunctions.H"
 
 int main() {
@@ -76,6 +77,37 @@ int main() {
     double y1 = solve(1, 1.,0.,0., 0.,1.,0., 0.,0.,1., 7.,8.,9.);
     printf("solve(I, [7,8,9]) = %.6f %.6f   (expect 7, 8 -> cache invalidates)\n", y0, y1);
     if (std::fabs(y0-7) > 1e-10 || std::fabs(y1-8) > 1e-10) { printf("  FAIL cache invalidation\n"); fail++; }
+
+    // ---- REQ-168 ADDENDUM (1): inf-tolerance. MOOD feeds non-finite candidate
+    // states by design; the kernel must report +inf, not garbage. (Eigen does
+    // NOT raise -- it returns NoConvergence and leaves the values unset.)
+    {
+        const double INF = std::numeric_limits<double>::infinity();
+        const double QNAN = std::nan("");
+        double ei = eigenvalues(0, 0.0, 1.0, INF, 4.0);
+        double en = eigenvalues(0, 0.0, 1.0, QNAN, 4.0);
+        printf("eigenvalues(inf matrix) = %f   eigenvalues(nan matrix) = %f   (expect +inf both)\n", ei, en);
+        if (!std::isinf(ei) || ei < 0) { printf("  FAIL inf-tolerance (inf)\n"); fail++; }
+        if (!std::isinf(en) || en < 0) { printf("  FAIL inf-tolerance (nan)\n"); fail++; }
+        // eigensystem: lambda=+inf, R=L=I  -> |A| = R|Lam|L = inf*I, never NaN
+        double lam0 = eigensystem(0, 0.0, 1.0, INF, 4.0);
+        double R00  = eigensystem(2, 0.0, 1.0, INF, 4.0);
+        double R01  = eigensystem(3, 0.0, 1.0, INF, 4.0);
+        double L00  = eigensystem(6, 0.0, 1.0, INF, 4.0);
+        printf("eigensystem(inf): lam0=%f  R=[%g %g ..]  L00=%g   (expect inf, I, I)\n", lam0, R00, R01, L00);
+        if (!std::isinf(lam0)) { printf("  FAIL eigensystem inf lambda\n"); fail++; }
+        if (R00 != 1.0 || R01 != 0.0 || L00 != 1.0) { printf("  FAIL eigensystem inf R/L != I\n"); fail++; }
+        // and the |A| product must be inf, NOT NaN (0*inf would poison the row)
+        double absA00 = R00 * std::fabs(lam0) * L00;
+        printf("  |A|[0,0] = %f  isnan=%d   (must be inf, never NaN)\n", absA00, (int)std::isnan(absA00));
+        if (std::isnan(absA00)) { printf("  FAIL |A| is NaN\n"); fail++; }
+        // a finite matrix must still work AFTER a non-finite one (cache key)
+        double back = eigenvalues(0, 2.0, 0.0, 0.0, 3.0);
+        double back1 = eigenvalues(1, 2.0, 0.0, 0.0, 3.0);
+        printf("  recovery after non-finite: %.4f %.4f   (expect 2, 3)\n", back, back1);
+        if (std::fabs(std::min(back,back1)-2.0) > 1e-10 || std::fabs(std::max(back,back1)-3.0) > 1e-10) {
+            printf("  FAIL recovery after non-finite\n"); fail++; }
+    }
 
     printf(fail ? "\nRESULT: %d FAILURES\n" : "\nRESULT: all pass\n", fail);
     return fail;
