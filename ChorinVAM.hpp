@@ -321,6 +321,30 @@ private:
         PetscCall(PressureResidual(p, rhs));        // rhs = residual(P)
         PetscCall(VecAXPY(rhs, -1.0, r0));          // rhs = A*P (matrix-free truth)
         PetscCall(MatMult(Pmat, p, lhs));           // lhs = Pmat*P (assembled)
+        // ── asymmetry of the assembled operator (owed to @jax, REQ-172) ────
+        // @jax's control (VAM pressure vs plain Poisson under unpreconditioned
+        // GMRES) shows VAM tracks Poisson and is BETTER at scale -- so iteration
+        // growth carries no VAM-specific information, and my "the operator is
+        // the problem" framing is retracted. But their metric is spectral
+        // clustering under NO preconditioner, which CANNOT see non-symmetry --
+        // and non-symmetry is exactly what breaks smoothed-aggregation AMG,
+        // which is my unexplained ~50% block-PCGAMG failure. pressure_operator()
+        // returns a first-derivative Ax block beside Axx, so the operator SHOULD
+        // be non-symmetric; this measures how much. ||A - A^T||_F / ||A||_F.
+        {
+            Mat At;
+            PetscCall(MatTranspose(Pmat, MAT_INITIAL_MATRIX, &At));
+            PetscCall(MatAXPY(At, -1.0, Pmat, DIFFERENT_NONZERO_PATTERN)); // At = A^T - A
+            PetscReal nA, nAsym;
+            PetscCall(MatNorm(Pmat, NORM_FROBENIUS, &nA));
+            PetscCall(MatNorm(At, NORM_FROBENIUS, &nAsym));
+            PetscCall(MatDestroy(&At));
+            if (rank == 0)
+                std::cout << "[Pmat] asymmetry ||A - A^T||_F / ||A||_F = "
+                          << (nA > 0 ? nAsym / nA : nAsym)
+                          << "   (||A||_F = " << nA << ")" << std::endl;
+        }
+
         PetscReal nt, nd, nl;
         PetscCall(VecNorm(rhs, NORM_2, &nt));       // ||A*P|| matrix-free
         PetscCall(VecNorm(lhs, NORM_2, &nl));       // ||Pmat*P|| assembled
