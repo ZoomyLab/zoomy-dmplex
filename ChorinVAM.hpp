@@ -556,6 +556,26 @@ private:
         PetscInt its; PetscCall(KSPGetIterationNumber(ksp, &its));
         if (rank == 0 && reason < 0)
             std::cout << "[KSP] pressure NOT converged (reason " << reason << ", " << its << " its)" << std::endl;
+        // TEMP DIAGNOSTIC (REQ-172): is the pressure solve the CAUSE or the
+        // VICTIM? Print ||P||, ||rhs||, the Pmat inf-norm and the state's h_min
+        // each step. If h_min degrades BEFORE ||P|| blows up the pressure is a
+        // victim; if ||P|| explodes first the operator is the problem.
+        if (getenv("ZOOMY_VAM_DIAG")) {
+            PetscReal np_, nr_, hmin = 1e300, pn = -1;
+            PetscCall(VecNorm(Pv, NORM_2, &np_));
+            PetscCall(VecNorm(Rhs, NORM_2, &nr_));
+            if (Pmat) PetscCall(MatNorm(Pmat, NORM_INFINITY, &pn));
+            const PetscScalar *xa; PetscCall(VecGetArrayRead(X, &xa));
+            for (PetscInt c = cS; c < cE; ++c) {
+                const PetscScalar *qc; PetscCall(DMPlexPointGlobalRead(dmQ, c, xa, &qc));
+                if (qc && qc[1] < hmin) hmin = qc[1];
+            }
+            PetscCall(VecRestoreArrayRead(X, &xa));
+            if (rank == 0)
+                std::cout << "[DIAG] reason=" << reason << " its=" << its
+                          << "  |P|=" << np_ << "  |rhs|=" << nr_
+                          << "  |Pmat|_inf=" << pn << "  h_min=" << hmin << std::endl;
+        }
         PetscFunctionReturn(PETSC_SUCCESS);
     }
     // corrector: refresh P-grad from the solved Pv, apply vam_corrector to the
