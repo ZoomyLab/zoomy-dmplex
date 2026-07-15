@@ -139,6 +139,14 @@ public:
         // ── Main time loop ──
         while (time < settings.solver.t_end) {
             PetscReal t0 = time, dt0; PetscCall(TSGetTimeStep(ts, &dt0));
+            // Land EXACTLY on t_end: TS_EXACTFINALTIME_STEPOVER lets the last step
+            // overshoot (t=0.109 for t_end=0.1), which skews cross-backend speed
+            // comparisons (REQ-159). Clamp the final dt instead of using MATCHSTEP
+            // (the SSP adapter trips "bad hmax in TSAdaptChoose" under MATCHSTEP).
+            if (t0 + dt0 > settings.solver.t_end) {
+                dt0 = settings.solver.t_end - t0;
+                PetscCall(TSSetTimeStep(ts, dt0));
+            }
             if (mood) { PetscCall(VecCopy(X, X_save)); std::fill(mood_mask.begin(), mood_mask.end(), 0); }
 
             PetscCall(TSStep(ts));

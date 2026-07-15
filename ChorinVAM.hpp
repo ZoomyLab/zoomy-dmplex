@@ -49,6 +49,8 @@ public:
         PetscCall(WriteSnapshot(time));
         while (time < settings.solver.t_end) {
             dt_chorin = std::max(ComputeTimeStep(), settings.solver.min_dt);
+            // land exactly on t_end (see MUSCLSolver; REQ-159)
+            if (time + dt_chorin > settings.solver.t_end) dt_chorin = settings.solver.t_end - time;
             PetscCall(Predictor(dt_chorin));
             PetscCall(ComputeFrozenAux());
             if (getenv("VAM_NO_PRESSURE") == nullptr) {
