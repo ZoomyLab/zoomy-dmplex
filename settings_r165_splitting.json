@@ -1,0 +1,31 @@
+{
+  "name": "SME0_swe_1d_r165",
+  "io": {
+    "directory": "outputs/r165_splitting",
+    "filename": "r165_splitting",
+    "snapshots": 2,
+    "snapshot_logic": "interpolate",
+    "clean_directory": true,
+    "mesh_path": "./bump_1d.msh",
+    "initial_condition_file": "./bump_ic.h5",
+    "initial_condition_mask": [
+      0,
+      1
+    ],
+    "write_3d": false
+  },
+  "solver": {
+    "t_end": 8.0,
+    "cfl": 0.45,
+    "reconstruction_order": 0,
+    "time_integration": "splitting",
+    "refresh_derivative_aux": false,
+    "positivity": "mood",
+    "ssp_stages": 5
+  },
+  "model": {
+    "parameters": {
+      "lambda_s": 5000.0
+    }
+  }
+}
