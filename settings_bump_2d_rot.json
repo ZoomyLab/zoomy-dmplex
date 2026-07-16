@@ -15,7 +15,7 @@
     "write_3d": false
   },
   "solver": {
-    "t_end": 0.05,
+    "t_end": 1.0,
     "cfl": 0.3,
     "dt": 0.002653638832620528,
     "reconstruction_order": 0,

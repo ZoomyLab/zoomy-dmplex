@@ -1,13 +1,13 @@
 {
   "name": "VAM_escalante_bump_1d",
   "io": {
-    "directory": "outputs/vam_bump_1d",
+    "directory": "outputs/vam_o2zs_n120",
     "filename": "vam_bump_1d",
     "snapshots": 40,
     "snapshot_logic": "interpolate",
     "clean_directory": true,
-    "mesh_path": "./bump_1d.msh",
-    "initial_condition_file": "./bump_ic.h5",
+    "mesh_path": "./mesh_n120.msh",
+    "initial_condition_file": "./ic_n120.h5",
     "initial_condition_mask": [
       0,
       1
@@ -15,13 +15,13 @@
     "write_3d": false
   },
   "solver": {
-    "t_end": 8.0,
+    "t_end": 20.0,
     "cfl": 0.3,
-    "dt": 0.0015921832995723167,
-    "reconstruction_order": 0,
+    "dt": 0.005307277665241056,
+    "reconstruction_order": 2,
     "method": "chorin",
     "time_integration": "splitting",
     "refresh_derivative_aux": false,
-    "positivity": "mood"
+    "positivity": "zhang_shu"
   }
 }
