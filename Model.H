@@ -32,6 +32,7 @@ struct Model {
     static constexpr int n_dof_qaux = 4;
     static constexpr int n_parameters = 5;
     static constexpr int dimension  = 1;
+    static constexpr double dt_max = 5.0;
     static constexpr int n_dof_gradQ = 0;
     static constexpr bool has_diffusion = false;
     static constexpr bool has_free_surface = true;
@@ -109,7 +110,10 @@ struct Model {
     PORTABLE_FN static inline SimpleArray<T, 3> source(
         const T* Q,
         const T* Qaux,
-        const T* p)
+        const T* p,
+        const T time,
+        const T dt,
+        const T* X)
     {
     SimpleArray<T, 3> res;
     res[0] = 0;
@@ -206,7 +210,8 @@ struct Model {
         const T* Q,
         const T* Qaux,
         const T* p,
-        const T dt)
+        const T time,
+        const T* X)
     {
     SimpleArray<T, 4> res;
     res[0] = Qaux[0];
@@ -220,7 +225,8 @@ struct Model {
         const T* Q,
         const T* Qaux,
         const T* p,
-        const T dt)
+        const T time,
+        const T* X)
     {
     T t0 = std::pow((T)2, 1.0/2.0);
     T t1 = std::max((T)1.0e-8, Q[1]);

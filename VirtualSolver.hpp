@@ -347,7 +347,12 @@ protected:
         PetscCall(VecRestoreArrayRead(X_loc, &x)); PetscCall(VecRestoreArrayRead(A_loc, &a));
         PetscCall(DMRestoreLocalVector(dmQ, &X_loc)); PetscCall(DMRestoreLocalVector(dmAux, &A_loc));
         PetscReal glob_min_ratio; MPI_Allreduce(&local_min_ratio, &glob_min_ratio, 1, MPIU_REAL, MPI_MIN, PETSC_COMM_WORLD);
-        if (!std::isfinite(glob_min_ratio) || glob_min_ratio >= 0.5 * PETSC_MAX_REAL) return 1e-3;  // no constraining cell
+        // REQ-190: WAVE-FREE (fully-dry) domain -> no cell constrains dt. Return
+        // the model's dt_max (NSM-carried, printer-emitted) instead of a magic
+        // 1e-3 floor, so a dry start (e.g. rainfall onto a dry bed) steps at
+        // dt_max until a wet cell appears, rather than crawling at 1e-3.
+        if (!std::isfinite(glob_min_ratio) || glob_min_ratio >= 0.5 * PETSC_MAX_REAL)
+            return Model<Real>::dt_max;
         return settings.solver.cfl * glob_min_ratio;
     }
 
