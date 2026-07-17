@@ -295,23 +295,60 @@ protected:
         PetscCall(DMGetLocalVector(dmQ, &X_loc)); PetscCall(DMGlobalToLocalBegin(dmQ, X, INSERT_VALUES, X_loc)); PetscCall(DMGlobalToLocalEnd(dmQ, X, INSERT_VALUES, X_loc));
         PetscCall(DMGetLocalVector(dmAux, &A_loc)); PetscCall(DMGlobalToLocalBegin(dmAux, A, INSERT_VALUES, A_loc)); PetscCall(DMGlobalToLocalEnd(dmAux, A, INSERT_VALUES, A_loc));
         PetscCall(VecGetArrayRead(X_loc, &x)); PetscCall(VecGetArrayRead(A_loc, &a));
+        // REQ-186 (firedrake): LOCAL per-cell CFL. The old dt = cfl * (global
+        // min inradius) / (global max |lambda|) pairs the smallest cell with the
+        // fastest wave even when they are different cells, over-shrinking dt on
+        // non-uniform meshes. Instead take min_c( r_c / lambda_c ): each cell's
+        // OWN inradius over its OWN max wave speed. r_c = min distance from the
+        // cell centroid to its face centroids -- exactly what PETSc's global
+        // minRadius reduces, so on a UNIFORM mesh min_c(r_c)=minRadius and this
+        // is bit-identical to the old formula; it only relaxes dt where cells
+        // and wave speeds vary.
+        Vec faceGeom, cellGeom;
+        PetscCall(DMPlexGetGeometryFVM(dmQ, &faceGeom, &cellGeom, NULL));
+        const PetscScalar *fGeom, *cGeom;
+        PetscCall(VecGetArrayRead(faceGeom, &fGeom)); PetscCall(VecGetArrayRead(cellGeom, &cGeom));
+        DM dmFace; PetscCall(VecGetDM(faceGeom, &dmFace)); PetscSection secFace; PetscCall(DMGetLocalSection(dmFace, &secFace));
+        DM dmCell; PetscCall(VecGetDM(cellGeom, &dmCell)); PetscSection secCell; PetscCall(DMGetLocalSection(dmCell, &secCell));
         PetscInt cStart, cEnd; PetscCall(DMPlexGetHeightStratum(dmQ, 0, &cStart, &cEnd));
-        Real max_eig = 0.0;
+        const int dim = Model<Real>::dimension;
+        Real local_min_ratio = PETSC_MAX_REAL;   // min_c( r_c / lambda_c )
         for(PetscInt c = cStart; c < cEnd; ++c) {
             const Real *qc, *ac;
             PetscCall(DMPlexPointLocalRead(dmQ, c, x, &qc)); PetscCall(DMPlexPointLocalRead(dmAux, c, a, &ac));
             if (!qc || !ac) continue;
-            for(int d=0; d<Model<Real>::dimension; ++d) {
+            Real eig_c = 0.0;
+            for(int d=0; d<dim; ++d) {
                 Real n[3] = {0}; n[d] = 1.0;
                 auto res = Numerics<Real>::local_max_abs_eigenvalue(qc, ac, parameters.data(), n);
-                if(res[0] > max_eig) max_eig = res[0];
+                if(res[0] > eig_c) eig_c = res[0];
+            }
+            if (eig_c < 1e-14) continue;   // no wave speed here -> this cell does not constrain dt
+            PetscInt coff; PetscCall(PetscSectionGetOffset(secCell, c, &coff));
+            const PetscFVCellGeom *cg = (const PetscFVCellGeom*)&cGeom[coff];
+            PetscInt nfaces; const PetscInt *cone;
+            PetscCall(DMPlexGetConeSize(dmQ, c, &nfaces)); PetscCall(DMPlexGetCone(dmQ, c, &cone));
+            Real r_c = PETSC_MAX_REAL;   // min centroid->face-centroid distance
+            for(PetscInt fi=0; fi<nfaces; ++fi) {
+                PetscInt foff;
+                PetscCall(PetscSectionGetOffset(secFace, cone[fi], &foff));
+                const PetscFVFaceGeom *fg = (const PetscFVFaceGeom*)&fGeom[foff];
+                Real d2 = 0.0;
+                for(int k=0;k<dim;++k){ Real dd = cg->centroid[k]-fg->centroid[k]; d2 += dd*dd; }
+                Real dist = std::sqrt(d2);
+                if (dist < r_c) r_c = dist;
+            }
+            if (r_c < PETSC_MAX_REAL) {
+                Real ratio = r_c / eig_c;
+                if (ratio < local_min_ratio) local_min_ratio = ratio;
             }
         }
+        PetscCall(VecRestoreArrayRead(faceGeom, &fGeom)); PetscCall(VecRestoreArrayRead(cellGeom, &cGeom));
         PetscCall(VecRestoreArrayRead(X_loc, &x)); PetscCall(VecRestoreArrayRead(A_loc, &a));
         PetscCall(DMRestoreLocalVector(dmQ, &X_loc)); PetscCall(DMRestoreLocalVector(dmAux, &A_loc));
-        PetscReal glob_eig; MPI_Allreduce(&max_eig, &glob_eig, 1, MPIU_REAL, MPI_MAX, PETSC_COMM_WORLD);
-        if (glob_eig < 1e-14) return 1e-3;
-        return settings.solver.cfl * minRadius / glob_eig;
+        PetscReal glob_min_ratio; MPI_Allreduce(&local_min_ratio, &glob_min_ratio, 1, MPIU_REAL, MPI_MIN, PETSC_COMM_WORLD);
+        if (!std::isfinite(glob_min_ratio) || glob_min_ratio >= 0.5 * PETSC_MAX_REAL) return 1e-3;  // no constraining cell
+        return settings.solver.cfl * glob_min_ratio;
     }
 
     PetscErrorCode PackState(Vec X_in, Vec A_in, Vec X_target) {
