@@ -29,10 +29,8 @@ import argparse
 import sys
 from pathlib import Path
 
-import sympy as sp
-from zoomy_core.misc.misc import ZArray
 from zoomy_core.numerics import NumericalSystemModel, ReconstructionSpec
-from zoomy_core.systemmodel.operations import desingularize_hinv
+from zoomy_core.systemmodel.operations import desingularize_hinv, guard_eigenvalue_powers
 from zoomy_core.fvm.riemann_solvers import PositiveNonconservativeRusanov
 from zoomy_core.model.boundary_conditions import (
     BoundaryConditions, FromModel)
@@ -41,40 +39,16 @@ from zoomy_core.transformation.to_c import CppModel, CppNumerics
 HERE = Path(__file__).resolve().parent
 
 
-def _guard_eig_powers():
-    """Op: guard fractional powers of h (e.g. sqrt(h**5)) in the eigenvalues
-    with Max(.,0) so a transient h<0 doesn't NaN — WITHOUT the dry conditional
-    gate. This is the ``ev_gate=False`` positivity recipe the numpy/jax Malpasset
-    reference uses: ungated wave speeds keep the Rusanov dissipation correctly
-    sized (the core default ``gate_eigenvalues_dry`` zeros λ at h<eps, which
-    undersizes dissipation between two near-dry cells and breaks the Xing-Zhang
-    cell-mean-positivity decomposition)."""
-    def _op(sm):
-        ev = sm.eigenvalues
-        if ev is None:
-            return
-        h = next(s for s in sm.state if str(s) == "h")
-        def _frac_pow_h(x):
-            return (isinstance(x, sp.Pow) and x.exp.is_number
-                    and not x.exp.is_integer and x.base.has(h))
-        def _guard(e):
-            return sp.sympify(e).replace(
-                _frac_pow_h, lambda x: sp.Pow(sp.Max(x.base, sp.S.Zero), x.exp))
-        sm.eigenvalues = ZArray([_guard(e) for e in ev]).reshape(*ev.shape)
-    _op.name = "guard_eig_powers"
-    return _op
+# REQ-181 (core@bed8721): the eigenvalue gate is no longer an NSM default, and
+# its always-safe half is now the reusable core op ``guard_eigenvalue_powers``.
+# dmplex's old local ``_guard_eig_powers`` + ``_UngatedNSM`` subclass are DELETED
+# — we compose the guard-only path via ``extra_operations`` in emit() instead.
+# WHY guard-only (not the dry-zeroing ``gate_eigenvalues_dry``): the zeroing
+# undersizes Rusanov dissipation between two near-dry cells and breaks the
+# Xing-Zhang cell-mean-positivity decomposition; the numpy/jax Malpasset
+# reference runs this same ev_gate=False recipe. desingularize_hinv (KP 1/h) is
+# still the core default; guard_eigenvalue_powers is our opt-in on top.
 
-
-class _UngatedNSM(NumericalSystemModel):
-    """NSM whose default_operations keep the KP hinv desingularization but drop
-    the dry eigenvalue GATE (replaced by the powers-guard) — matching the jax
-    reference's ev_gate=False for structural wet/dry positivity."""
-    def default_operations(self):
-        if not self._is_transport_system():
-            return []
-        if not any(str(s) == "h" for s in self.state):
-            return []
-        return [desingularize_hinv(), _guard_eig_powers()]
 # MalpassetSME (carries the wet/dry momentum CLAMP via update_variables, the
 # positivity safety net the numpy/jax solver applies every step) lives in the
 # thesis Malpasset case. Core SME has no clamp and MalpassetSWE won't lower to
@@ -105,9 +79,13 @@ def build_system_model(dimension=3):
 
 def emit(out=HERE, what="both", dimension=3, order=0):
     sm = build_system_model(dimension=dimension)
-    nsm = _UngatedNSM.from_system_model(
+    # REQ-181: stock NSM (default = [desingularize_hinv()] only, no gate) +
+    # guard-only opt-in. Reproduces the old _UngatedNSM operation list
+    # [desingularize_hinv(), guard_eigenvalue_powers()] exactly.
+    nsm = NumericalSystemModel.from_system_model(
         sm, reconstruction=ReconstructionSpec(order=order),
-        riemann=PositiveNonconservativeRusanov)
+        riemann=PositiveNonconservativeRusanov,
+        extra_operations=[guard_eigenvalue_powers()])
 
     if what in ("both", "model"):
         # REQ-66 (core ae1a2aa) types Min/Max literals — no interim cast needed.
