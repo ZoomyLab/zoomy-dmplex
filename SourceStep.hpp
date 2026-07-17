@@ -28,18 +28,24 @@ inline SimpleArray<T, Model<T>::n_dof_qaux * Model<T>::n_dof_q>
 aux_jacobian_wrt_q(const T* q, const T* aux, const T* params) {
     constexpr int n_q = Model<T>::n_dof_q;
     constexpr int n_aux = Model<T>::n_dof_qaux;
+    // REQ-185: update_aux_variables is now (Q, Qaux, p, time, X). No dmplex model
+    // consumes time/position in update_aux (generated bodies ignore them); this
+    // is a single-cell FD jacobian, so pass time=0 and a zero-position
+    // placeholder (segfault-safe — thread the real centroid if/when a
+    // position-dependent aux lands on dmplex).
+    const T X0[3] = {(T)0, (T)0, (T)0};
     if constexpr (HasAuxJacobian<T>::value) {
         return Model<T>::update_aux_variables_jacobian_wrt_variables(q, aux, params);
     } else {
         SimpleArray<T, n_aux * n_q> J;
         for (int i = 0; i < n_aux * n_q; ++i) J[i] = (T)0;
-        auto a0 = Model<T>::update_aux_variables(q, aux, params, 0.0);
+        auto a0 = Model<T>::update_aux_variables(q, aux, params, 0.0, X0);
         T qp[n_q];
         for (int j = 0; j < n_q; ++j) {
             for (int m = 0; m < n_q; ++m) qp[m] = q[m];
             T h = (T)1e-7 * (std::abs(q[j]) + (T)1e-7);
             qp[j] += h;
-            auto a1 = Model<T>::update_aux_variables(qp, aux, params, 0.0);
+            auto a1 = Model<T>::update_aux_variables(qp, aux, params, 0.0, X0);
             for (int k = 0; k < n_aux; ++k) J[k * n_q + j] = (a1[k] - a0[k]) / h;
         }
         return J;
@@ -126,6 +132,9 @@ private:
         std::vector<PetscScalar> residual(n_q);
         std::vector<PetscScalar> delta(n_q);
         std::vector<PetscScalar> J(n_q * n_q);
+        // REQ-185: source()/update_aux carry (time, X); dt is real here, no
+        // dmplex source/aux consumes time/position, so time=0 + zero-position.
+        const T X0[3] = {(T)0, (T)0, (T)0};
 
         // Initialize state
         for(int i=0; i<n_q; ++i) {
@@ -141,11 +150,11 @@ private:
 
         for(int iter=0; iter < max_newton_iter; ++iter) {
             // 1. Update Aux variables based on current Q (Consistency Step)
-            auto updated_aux = Model<T>::update_aux_variables(q_curr.data(), aux_curr.data(), params, 0.0);
+            auto updated_aux = Model<T>::update_aux_variables(q_curr.data(), aux_curr.data(), params, 0.0, X0);
             for(int i=0; i<n_aux; ++i) aux_curr[i] = updated_aux[i];
 
             // 2. Compute Source Term and Residual
-            auto S = Model<T>::source(q_curr.data(), aux_curr.data(), params);
+            auto S = Model<T>::source(q_curr.data(), aux_curr.data(), params, (T)0, dt, X0);
             
             T res_norm = 0.0;
             for(int i=0; i<n_q; ++i) {

@@ -41,8 +41,10 @@ using FluxKernelPtr = SimpleArray<PetscScalar, Model<Real>::n_dof_q> (*)(
     const PetscScalar*, const PetscScalar*, const PetscScalar*, const PetscScalar*, 
     const PetscScalar*, const PetscScalar*);
 
+// REQ-185: source now carries (time, dt, X) after (Q, Qaux, p).
 using SourceKernelPtr = SimpleArray<PetscScalar, Model<Real>::n_dof_q> (*)(
-    const PetscScalar*, const PetscScalar*, const PetscScalar*);
+    const PetscScalar*, const PetscScalar*, const PetscScalar*,
+    const PetscScalar, const PetscScalar, const PetscScalar*);
 
 using NonConservativeFluxKernelPtr = SimpleArray<PetscScalar, 2 * Model<Real>::n_dof_q> (*)(
     const PetscScalar* qL, const PetscScalar* qR, const PetscScalar* aL, const PetscScalar* aR, 

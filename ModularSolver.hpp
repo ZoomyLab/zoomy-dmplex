@@ -112,7 +112,12 @@ public:
                     if (x_arr[offQ + 1] < 1e-6) apply_source = false;
                 }
                 if (apply_source) {
-                    auto S = Model<Real>::source(&x_arr[offQ], &a_arr[offA], params_ptr);
+                    // REQ-185: source(Q,Qaux,p,time,dt,X). No dmplex source
+                    // consumes time/dt/position (generated bodies ignore them);
+                    // pass 0/0 + zero-position (thread sim-time + cell centroid
+                    // here when a time/position-dependent source lands).
+                    const Real X0[3] = {0, 0, 0};
+                    auto S = Model<Real>::source(&x_arr[offQ], &a_arr[offA], params_ptr, (Real)0, (Real)0, X0);
                     for (int i = 0; i < Model<Real>::n_dof_q; ++i) f_arr[idx_glob + i] += sign * S[i];
                 }
             }
@@ -131,6 +136,7 @@ public:
         const int n_dof = Model<Real>::n_dof_q;
         const int n_aux = Model<Real>::n_dof_qaux;
         const Real eps = 1e-7;
+        const Real X0[3] = {0, 0, 0};   // REQ-185: update_aux position placeholder (unused by dmplex models)
 
         auto F_base = config_flux_kernel(qL, qR, aL, aR, params, n);
         SimpleArray<Real, 2 * Model<Real>::n_dof_q> NC_base;
@@ -142,7 +148,7 @@ public:
             Real aL_p[n_aux]; for(int k=0; k<n_aux; ++k) aL_p[k] = aL[k];
             qL_p[j] += eps;
             if (n_aux > 0) {
-                auto res_a = Model<Real>::update_aux_variables(qL_p, aL_p, params, 0.0);
+                auto res_a = Model<Real>::update_aux_variables(qL_p, aL_p, params, 0.0, X0);
                 for(int k=0; k<n_aux; ++k) aL_p[k] = res_a[k];
             }
             auto F_p = config_flux_kernel(qL_p, qR, aL_p, aR, params, n);
@@ -162,7 +168,7 @@ public:
             Real aR_p[n_aux]; for(int k=0; k<n_aux; ++k) aR_p[k] = aR[k];
             qR_p[j] += eps;
             if (n_aux > 0) {
-                auto res_a = Model<Real>::update_aux_variables(qR_p, aR_p, params, 0.0);
+                auto res_a = Model<Real>::update_aux_variables(qR_p, aR_p, params, 0.0, X0);
                 for(int k=0; k<n_aux; ++k) aR_p[k] = res_a[k];
             }
             auto F_p = config_flux_kernel(qL, qR_p, aL, aR_p, params, n);
@@ -191,7 +197,8 @@ public:
         auto qR_base = Model<Real>::boundary_conditions(bc_idx, qL, aL, params, n, centroid, time, 0.0);
         PetscScalar aR_base[n_aux];
         if (n_aux > 0) {
-             auto res = Model<Real>::update_aux_variables(qR_base.data, aL, params, 0.0); 
+             // REQ-185: real boundary-face position + time are in scope here.
+             auto res = Model<Real>::update_aux_variables(qR_base.data, aL, params, time, centroid);
              for(int i=0; i<n_aux; ++i) aR_base[i] = res[i];
         }
         
@@ -206,14 +213,14 @@ public:
             
             qL_p[j] += eps;
             if (n_aux > 0) {
-                auto res_a = Model<Real>::update_aux_variables(qL_p, aL_p, params, 0.0);
+                auto res_a = Model<Real>::update_aux_variables(qL_p, aL_p, params, time, centroid);
                 for(int k=0; k<n_aux; ++k) aL_p[k] = res_a[k];
             }
 
             auto qR_p = Model<Real>::boundary_conditions(bc_idx, qL_p, aL_p, params, n, centroid, time, 0.0);
             PetscScalar aR_p[n_aux];
             if (n_aux > 0) {
-                auto res_ar = Model<Real>::update_aux_variables(qR_p.data, aL_p, params, 0.0);
+                auto res_ar = Model<Real>::update_aux_variables(qR_p.data, aL_p, params, time, centroid);
                 for(int k=0; k<n_aux; ++k) aR_p[k] = res_ar[k];
             }
 
